@@ -306,4 +306,100 @@ A real runtime URL/token was not supplied, so
 the live REST, WebSocket, kernelspec, notebook, and cancellation acceptance
 tests remain deployment gates rather than claimed results.
 
+## 2026-09-10 — OpenWebUI v0.11.3 upgrade, vLLM connection, bind-mounted outputs
+
+Purpose: production is running OpenWebUI v0.11.3 while this platform's audited
+baseline was v0.10.2; add a vLLM (OpenAI-compatible) connection alongside the
+existing external Ollama connection; move scientific outputs, the audit
+trail, and installed tool versions from Docker named volumes to bind-mounted
+host directories so an operator can inspect/back them up without Docker
+tooling.
+
+Source upgrade: `source-code/open-webui` replaced in full with the upstream
+`v0.11.3` tag (commit `2a960a59fe1dbbd35282f0556b3666d81102e781`), shallow-cloned
+from `https://github.com/open-webui/open-webui.git` and copied over the
+checked-in `v0.10.2` tree (`ecd48e2f718220a6400ecf49eafd4867a38feb10`). Every
+claim in `ARCHITECTURE_DECISIONS.md` §1 and §8 was re-verified against the new
+source by direct `diff -u` (not re-derived from memory or assumed unchanged);
+findings are recorded in a new §12 and as inline `[v0.11.3: ...]` notes.
+Summary of what actually changed: the five separate request middlewares were
+replaced by one consolidated `AppHTTPMiddleware`; Filters gained an optional
+`request` hook additive to `inlet`/`stream`/`outlet`; file uploads gained two
+optional behaviors on an unchanged publication path; `backend/requirements.txt`
+drops `python-jose` for `joserfc` and renames `rapidocr-onnxruntime` to
+`rapidocr`; the branding overlay's patch targets (`env.py` WEBUI_NAME/favicon,
+`compareVersion()`, `main.py` logo reference, `site.webmanifest`) are all
+byte-for-byte unchanged, so `branding/apply_branding.py` and
+`branding/verify_branding_overlay.py` needed no code changes; and OpenWebUI
+introduced an unrelated new "Open Terminal" feature
+(`TERMINAL_SERVER_CONNECTIONS`, default empty) providing real server-side
+command execution, which is explicitly left unconfigured and undocumented as
+an integration point, for the same reason Stage 13 does not implement a shell
+Tool — it is not the browser-side Pyodide Code Interpreter this platform
+already relies on, which is unchanged. `grep` across `service/`,
+`openwebui_tools/`, `openwebui_functions/`, `branding/`, and `docker/` found no
+references to the removed/renamed Python packages or to the old middleware
+class names. Ten new Alembic migrations exist between the two versions; a new
+`scripts/backup_openwebui_data.sh` backs up the `openwebui-data` volume before
+a rebuild runs them, and `next_step`/`OFFLINE_DEPLOYMENT.md` now call for that
+backup on any host with real existing data. All `v0.10.2`/`sacalra3` version
+and image-tag strings across `docker-compose.yml`, `docker/openwebui.Dockerfile`,
+`scripts/*.sh`, `branding/apply_branding.py`, and `docs/*.md` were updated to
+`v0.11.3`/`sacalra1` (a fresh overlay-revision counter on the new base); one
+pre-existing drift in `docs/OFFLINE_DEPLOYMENT.md` (`sacalra2` for the
+dependency-image tags, where every build script already used `sacalra3`) was
+also corrected to `sacalra1` while there.
+
+vLLM connection: OpenWebUI's existing `ENABLE_OPENAI_API` /
+`OPENAI_API_BASE_URLS` / `OPENAI_API_KEYS` env vars (unchanged in v0.11.3,
+confirmed in `config.py`) are wired into the `openwebui` Compose service
+alongside the existing `OLLAMA_BASE_URL`/`OLLAMA_BASE_URLS`, following the
+same "external service, not a Compose service" pattern Ollama already uses.
+`ENABLE_OPENAI_API` defaults to `false` so a host with no OpenAI-compatible
+server does not silently fall back to the public OpenAI API. `.env.example`
+and `.env.server-253.example` document it commented-out;
+`.env.server-254.example` sets it concretely to the vLLM instance at
+`10.61.247.254:8004/v1` with the `EMPTY` placeholder key vLLM itself expects
+when started without `--api-key`.
+
+Bind-mounted outputs: `sacai-outputs`, `sacai-audit`, and
+`sacai-tool-versions` named volumes are replaced with bind mounts to
+`SACAI_OUTPUT_HOST_PATH` / `SACAI_AUDIT_HOST_PATH` /
+`SACAI_TOOL_VERSIONS_HOST_PATH` (default `./offline/data/{outputs,audit,
+tool_versions}`, already covered by the existing `sacai-platform/offline/`
+`.gitignore` entry) across every service that mounts them (`openwebui`,
+`sacai-api`, `planetir-worker`, `isis-worker`, `notebook-worker`). Container-side
+paths (`/data/outputs`, `/data/audit`, `/data/tool_versions`) are unchanged, so
+no service code needed changes. New `scripts/prepare_output_host_paths.sh`
+creates and validates the host directories (called from `rebuild_offline.sh`
+and documented in the deployment guides); new
+`scripts/migrate_named_volumes_to_bind_mounts.sh` copies forward any data left
+in the old named volumes from a prior release, using the already-loaded
+`sacai-api` image rather than pulling an `alpine` image an offline host would
+not have.
+
+Checks run on this Mac-equivalent environment:
+
+```text
+python3 -m compileall -q sacai-platform/service sacai-platform/openwebui_tools \
+  sacai-platform/openwebui_functions sacai-platform/branding sacai-platform/isis
+python3 -m compileall -q source-code/open-webui/backend/open_webui
+bash -n sacai-platform/scripts/*.sh
+grep -rn "import jose\|rapidocr\|rosepine\|RedirectMiddleware\|SecurityHeadersMiddleware\|CommitSessionMiddleware\|AuthTokenMiddleware\|WebsocketUpgradeGuardMiddleware\|XTerminal\|AddTerminalServerModal" \
+  sacai-platform/service sacai-platform/openwebui_tools sacai-platform/openwebui_functions \
+  sacai-platform/branding sacai-platform/docker
+docker compose --env-file sacai-platform/.env.example -f sacai-platform/docker-compose.yml config --quiet
+docker compose --env-file sacai-platform/.env.server-253.example -f sacai-platform/docker-compose.yml config --quiet
+docker compose --env-file sacai-platform/.env.server-254.example -f sacai-platform/docker-compose.yml config --quiet
+```
+
+All commands passed; the grep for removed/renamed dependencies and rejected
+frontend components returned no matches in this overlay's own code, and all
+three Compose configurations resolved the new OpenAI/vLLM variables and
+bind-mounted output paths correctly. `run_on_alma_builder.sh`'s live wheel
+resolution against the new `requirements.txt`, the disconnected rebuild gate,
+and a real vLLM `/v1/models` reachability check from inside the OpenWebUI
+container remain required on the actual connected AlmaLinux builder and
+offline RHEL hosts; none of those were claimed as passing here.
+
 

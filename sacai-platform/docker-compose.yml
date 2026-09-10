@@ -8,8 +8,8 @@ services:
       network: none
       args:
         PROJECT_NAME: "${PROJECT_NAME:-SAC-ALRA}"
-        OPENWEBUI_VERSION: "0.10.2"
-    image: sacai/openwebui:v0.10.2-sacalra3-amd64
+        OPENWEBUI_VERSION: "0.11.3"
+    image: sacai/openwebui:v0.11.3-sacalra1-amd64
     restart: unless-stopped
     ports:
       - "${SACAI_WEB_PORT:-3000}:8080"
@@ -26,6 +26,14 @@ services:
       no_proxy: ""
       OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:?set the existing Ollama API URL in .env}"
       OLLAMA_BASE_URLS: "${OLLAMA_BASE_URLS:-}"
+      # vLLM (or any OpenAI-compatible server) runs alongside Ollama the same
+      # way Ollama does: as an existing external service this stack connects
+      # to, never as a Compose service. Leave ENABLE_OPENAI_API=false until
+      # OPENAI_API_BASE_URLS is actually set; otherwise OpenWebUI falls back
+      # to the public OpenAI API, which is unreachable from an offline host.
+      ENABLE_OPENAI_API: "${ENABLE_OPENAI_API:-false}"
+      OPENAI_API_BASE_URLS: "${OPENAI_API_BASE_URLS:-}"
+      OPENAI_API_KEYS: "${OPENAI_API_KEYS:-}"
       OFFLINE_MODE: "true"
       VECTOR_DB: chroma
       CHROMA_HTTP_HOST: chroma
@@ -41,7 +49,7 @@ services:
     volumes:
       - openwebui-data:/app/backend/data
       - ./offline/models/openwebui-cache:/app/backend/data/cache
-      - sacai-outputs:/data/outputs:ro
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs:ro"
       - ./openwebui_tools:/opt/sacai/tools:ro
       - ./openwebui_functions:/opt/sacai/functions:ro
       - ./prompts:/opt/sacai/prompts:ro
@@ -89,9 +97,9 @@ services:
       LANGGRAPH_STRICT_MSGPACK: "true"
     volumes:
       - openwebui-data:/app/backend/data:ro
-      - sacai-outputs:/data/outputs
-      - sacai-audit:/data/audit
-      - sacai-tool-versions:/data/tool_versions
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs"
+      - "${SACAI_AUDIT_HOST_PATH:-./offline/data/audit}:/data/audit"
+      - "${SACAI_TOOL_VERSIONS_HOST_PATH:-./offline/data/tool_versions}:/data/tool_versions"
     depends_on:
       redis:
         condition: service_healthy
@@ -108,9 +116,9 @@ services:
     environment: *service-environment
     volumes:
       - openwebui-data:/app/backend/data:ro
-      - sacai-outputs:/data/outputs
-      - sacai-audit:/data/audit
-      - sacai-tool-versions:/data/tool_versions
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs"
+      - "${SACAI_AUDIT_HOST_PATH:-./offline/data/audit}:/data/audit"
+      - "${SACAI_TOOL_VERSIONS_HOST_PATH:-./offline/data/tool_versions}:/data/tool_versions"
     depends_on:
       redis:
         condition: service_healthy
@@ -138,9 +146,9 @@ services:
       ISIS_PROJECT_COMMAND: "${ISIS_PROJECT_COMMAND:-}"
     volumes:
       - openwebui-data:/app/backend/data:ro
-      - sacai-outputs:/data/outputs
-      - sacai-audit:/data/audit
-      - sacai-tool-versions:/data/tool_versions
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs"
+      - "${SACAI_AUDIT_HOST_PATH:-./offline/data/audit}:/data/audit"
+      - "${SACAI_TOOL_VERSIONS_HOST_PATH:-./offline/data/tool_versions}:/data/tool_versions"
       - "${ISISDATA_HOST_PATH:-./offline/isisdata}:/opt/isisdata:ro"
     depends_on:
       redis:
@@ -157,8 +165,8 @@ services:
     command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=notebook_remote", "--concurrency=${NOTEBOOK_CONCURRENCY:-4}", "--hostname=notebook@%h"]
     environment: *service-environment
     volumes:
-      - sacai-outputs:/data/outputs
-      - sacai-audit:/data/audit
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs"
+      - "${SACAI_AUDIT_HOST_PATH:-./offline/data/audit}:/data/audit"
     depends_on:
       redis:
         condition: service_healthy
@@ -197,8 +205,11 @@ services:
 
 volumes:
   openwebui-data:
-  sacai-outputs:
-  sacai-audit:
-  sacai-tool-versions:
   redis-data:
   chroma-data:
+# sacai-outputs, sacai-audit, and sacai-tool-versions are bind-mounted host
+# directories (SACAI_OUTPUT_HOST_PATH / SACAI_AUDIT_HOST_PATH /
+# SACAI_TOOL_VERSIONS_HOST_PATH in .env, default ./offline/data/{outputs,
+# audit,tool_versions}) so scientific outputs, the audit trail, and installed
+# tool versions are plain, directly browsable/backupable directories on the
+# host rather than Docker-managed volumes. See scripts/prepare_output_host_paths.sh.

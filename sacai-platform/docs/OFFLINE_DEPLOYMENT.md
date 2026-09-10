@@ -42,9 +42,9 @@ The script pre-stages:
 Exact container inputs are `node:22-alpine3.20`,
 `python:3.11-slim-bookworm`, `redis:7.4.2-alpine`,
 `chromadb/chroma:1.5.9`, the locally built
-`sacai/openwebui-node-deps:v0.10.2-sacalra2-amd64`,
-`sacai/openwebui-python-deps:v0.10.2-sacalra2-amd64`,
-`sacai/openwebui:v0.10.2-sacalra3-amd64`,
+`sacai/openwebui-node-deps:v0.11.3-sacalra1-amd64`,
+`sacai/openwebui-python-deps:v0.11.3-sacalra1-amd64`,
+`sacai/openwebui:v0.11.3-sacalra1-amd64`,
 `sacai/scientific-service:1.1.0-amd64`, and
 `sacai/tests:1.1.0-amd64`. Optional ISIS additionally needs the operator-built
 `sacai/isis-runtime:8.3.0-amd64` and `sacai/isis-worker:8.3.0-sacai1-amd64`.
@@ -73,6 +73,7 @@ vi .env
 ./scripts/verify_offline_bundle.sh
 ./scripts/load_offline_images.sh
 docker compose config
+./scripts/prepare_output_host_paths.sh
 ./scripts/rebuild_offline.sh
 ```
 
@@ -85,10 +86,33 @@ Keep OpenWebUI's storage provider on the local shared `openwebui-data` volume;
 S3/GCS providers require a separately designed offline object-store handoff and
 are not silently treated as local worker paths.
 
+If a vLLM instance (or any other OpenAI-compatible server) is already running
+on this host, set `ENABLE_OPENAI_API=true` and `OPENAI_API_BASE_URLS` to its
+`.../v1` URL alongside the existing `OLLAMA_BASE_URL`; both connections are
+available in OpenWebUI at once. `OPENAI_API_KEYS` accepts vLLM's own `EMPTY`
+placeholder when the server was started without `--api-key`. Leave
+`ENABLE_OPENAI_API=false` on a host with no OpenAI-compatible server, since an
+empty `OPENAI_API_BASE_URLS` otherwise falls back to the public OpenAI API,
+which this offline host cannot reach.
+
+`SACAI_OUTPUT_HOST_PATH`, `SACAI_AUDIT_HOST_PATH`, and
+`SACAI_TOOL_VERSIONS_HOST_PATH` are plain host directories (default
+`./offline/data/{outputs,audit,tool_versions}`), not Docker named volumes, so
+an operator can inspect or back up scientific outputs, the audit trail, and
+installed tool versions directly. `prepare_output_host_paths.sh` creates them
+and confirms they are writable; `migrate_named_volumes_to_bind_mounts.sh`
+copies over any data left in the old `sacai-outputs`/`sacai-audit`/
+`sacai-tool-versions` named volumes from a release before this change.
+
 `rebuild_offline.sh` sets BuildKit networking to `none`, uses `--pull=false`,
 and starts with `--pull never`. If Docker reports a missing image/wheel/cache,
 stop: return to the connected staging host and add the missing artifact. Do not
 temporarily connect production to the internet.
+
+Before rebuilding onto a new OpenWebUI version on a host that already has real
+data (not a first-time install), run `./scripts/backup_openwebui_data.sh` —
+the rebuild runs OpenWebUI's own database migrations against the existing
+`openwebui-data` volume in one step, and that step is not reversible.
 
 ## Rebuild after a code-only change, still offline
 

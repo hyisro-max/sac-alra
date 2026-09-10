@@ -1,19 +1,21 @@
 # SAC-ALRA Architecture Decisions
 
 Status: accepted for implementation  
-Source baseline: OpenWebUI `v0.10.2`, commit `ecd48e2f718220a6400ecf49eafd4867a38feb10`
+Source baseline: OpenWebUI `v0.11.3`, commit `2a960a59fe1dbbd35282f0556b3666d81102e781`
+(upgraded from the originally audited `v0.10.2`, commit `ecd48e2f718220a6400ecf49eafd4867a38feb10`;
+see §12 for what the re-audit found and changed)
 
 ## 1. Source findings
 
-This file was written before implementation code. The decisions below come from reading the checked-in OpenWebUI backend and frontend, not from assumptions about another release.
+This file was written before implementation code. The decisions below come from reading the checked-in OpenWebUI backend and frontend, not from assumptions about another release. §12 records a later re-audit against `v0.11.3`; where that re-audit found a claim below no longer accurate, the claim is marked `[v0.11.3: ...]` rather than silently rewritten, so the original source-derived reasoning stays visible.
 
 ### Backend map
 
-- `backend/open_webui/main.py` creates the FastAPI application, installs authentication, security, session-commit and audit middleware, and mounts the API routers. Chat preparation and completion processing live mainly in `backend/open_webui/utils/middleware.py`.
+- `backend/open_webui/main.py` creates the FastAPI application, installs authentication, security, session-commit and audit middleware, and mounts the API routers. Chat preparation and completion processing live mainly in `backend/open_webui/utils/middleware.py`. `[v0.11.3: the five separate BaseHTTPMiddleware subclasses this described are now one consolidated AppHTTPMiddleware — see §12.]`
 - Local Tools are Python source stored in the `tool` table. `utils/plugin.py` executes that source, instantiates its `Tools` class, and `utils/tools.py:get_tools()` exposes every public callable discovered on the instance. Reserved parameters beginning with `__` are removed from the model-visible schema and injected by OpenWebUI.
 - Functions are Python source stored in the `function` table. They instantiate `Pipe`, `Filter`, `Action`, or `Event`. Filters run through `inlet`, `stream`, and `outlet` hooks in `utils/filter.py`; Pipes appear as models and implement their own chat request/response path.
 - “Pipelines” in this release are not an internal job system. `routers/pipelines.py` proxies admin operations and inlet/outlet calls to a separately deployed OpenAI-compatible Pipelines server.
-- Uploaded file bytes go through `routers/files.py:upload_file_handler()` to `Storage.upload_file()`. A `FileForm` row is then inserted into the `file` table. The local provider writes to `UPLOAD_DIR`, which is `DATA_DIR/uploads` (normally `/app/backend/data/uploads`), not an arbitrary `/mnt/uploads` directory.
+- Uploaded file bytes go through `routers/files.py:upload_file_handler()` to `Storage.upload_file()`. A `FileForm` row is then inserted into the `file` table. The local provider writes to `UPLOAD_DIR`, which is `DATA_DIR/uploads` (normally `/app/backend/data/uploads`), not an arbitrary `/mnt/uploads` directory. `[v0.11.3: same function signature and same publication path; the `metadata` form field now parses through a `JSONCodec` wrapper instead of stdlib `json`, and image/video uploads can additionally route to content extraction even when `content_extraction_engine != 'external'` — neither changes how this overlay registers worker outputs.]`
 - The chat frontend sends file descriptors shaped like `{type: "file"|"image", id, url: id, name, content_type, size, ...}`. Chat middleware places this list in `metadata.files`; `utils/tools.py` injects it as `__files__`. A Tool must resolve `entry.id` with `Files.get_file_by_id()` and then resolve the stored path with `Storage.get_file()` after checking ownership/access. A UUID-prefixed stored filename is an implementation detail and is never an LLM argument.
 - Downloadability and the user Files browser require both storage bytes and a `file` table row. Merely writing below a mounted directory is insufficient. Downloads use `/api/v1/files/{id}/content` and enforce owner/admin/access-grant checks.
 - Knowledge bases use the `knowledge`, `knowledge_file`, and file records plus the configured vector adapter. Chroma is already the default adapter and can use either a local persistent client or one HTTP Chroma instance. Knowledge is retrieved context and is not executable.
@@ -26,7 +28,7 @@ This file was written before implementation code. The decisions below come from 
 
 - Runtime branding comes from backend `WEBUI_NAME`; however `env.py` appends ` (Open WebUI)` to custom names. Startup `<title>` is hardcoded in `src/app.html`, notification titles are hardcoded in `src/routes/+layout.svelte`, and channel titles and PWA/OpenSearch metadata contain additional literals. Favicons and splash artwork are under `static/`.
 - Uploaded user images already render inline in `Messages/UserMessage.svelte` when either `type === "image"` or `content_type` begins with `image/`. The upload path sets `content_type`, and `InputMenu/Files.svelte` maps stored image MIME types back to `type: "image"`. Assistant output images render inline in `Messages/ResponseMessage.svelte` when the returned file descriptor has the same shape. Stage 8 therefore hardens and tests this existing behavior instead of replacing it.
-- The file picker used from chat is `MessageInput/InputMenu/Files.svelte`; it calls `/api/v1/files/search` and therefore reads the `file` table. The Code Interpreter/terminal side panel is `ChatControls.svelte`; its Files tab is a separate Pyodide/terminal filesystem view. Scientific outputs will be registered in OpenWebUI Files and attached to the assistant message; they are not presented as unregistered paths in a browser-only Pyodide filesystem.
+- The file picker used from chat is `MessageInput/InputMenu/Files.svelte`; it calls `/api/v1/files/search` and therefore reads the `file` table. The Code Interpreter/terminal side panel is `ChatControls.svelte`; its Files tab is a separate Pyodide/terminal filesystem view. Scientific outputs will be registered in OpenWebUI Files and attached to the assistant message; they are not presented as unregistered paths in a browser-only Pyodide filesystem. `[v0.11.3: this "Code Interpreter/terminal" panel is unchanged and still purely browser-side Pyodide (WASM), confirmed at the same file paths. It is not the same thing as the new, unrelated "Open Terminal" feature introduced in this release (XTerminal.svelte, TERMINAL_SERVER_CONNECTIONS) — see §12, which is a real server-side command/file-execution surface an admin can wire up and is explicitly not to be enabled here.]`
 
 ## 2. Placement decisions
 
@@ -97,6 +99,7 @@ The proposed order is retained with two small implementation dependencies docume
 - A Knowledge document describing callable functions was rejected because Knowledge is prompt context, not an executable registry, and can induce false tool calls.
 - Multiple narrow STAC or PlanetIR helper methods were rejected because OpenWebUI exposes public methods as separate model-callable functions and this project has already experienced tool-call loops from that pattern.
 - A second vector store was rejected because OpenWebUI already supports Chroma and the mandate permits only one platform-owned store.
+- Enabling OpenWebUI's built-in "Open Terminal" feature (`TERMINAL_SERVER_CONNECTIONS`, introduced in a later OpenWebUI release than this platform's original baseline; see §12) was rejected for the same reason Stage 13 rejects a general agentic shell: it is a real server-side command/file-execution surface, not the browser-side Pyodide Code Interpreter this platform already relies on. It is left unconfigured (`TERMINAL_SERVER_CONNECTIONS=[]`, the OpenWebUI default) and is not wired to any SACAI Tool or service.
 
 ## 8. Production frontend corrections
 
@@ -162,3 +165,99 @@ to the queued task but is excluded from job metadata, audit events, task
 results, and error text. Production should use HTTPS for any route crossing an
 untrusted network; this design cannot make a token sent to an HTTP server
 confidential.
+
+## 12. v0.10.2 → v0.11.3 re-audit
+
+The vendored OpenWebUI source was upgraded from the originally audited `v0.10.2`
+(commit `ecd48e2f718220a6400ecf49eafd4867a38feb10`) to `v0.11.3` (commit
+`2a960a59fe1dbbd35282f0556b3666d81102e781`). Every claim in §1 and §8 was
+re-checked directly against the new source (`diff -u` against the old tree,
+corroborated with the new tree's `CHANGELOG.md`) rather than assumed to still
+hold. Unchanged claims are not repeated here; §1/§8 carry inline
+`[v0.11.3: ...]` notes only where something actually changed. This section
+records what changed, why it does not require redesigning any placement
+decision above, and what still needs attention during the connected-builder
+rebuild.
+
+**Middleware rewrite (affects §1's `main.py` bullet only).** The five
+separate `BaseHTTPMiddleware` subclasses v0.10.2 installed individually
+(`RedirectMiddleware`, `SecurityHeadersMiddleware`, `CommitSessionMiddleware`,
+`AuthTokenMiddleware`, `WebsocketUpgradeGuardMiddleware`) are replaced by one
+consolidated pure-ASGI `AppHTTPMiddleware`
+(`backend/open_webui/utils/asgi_middleware.py`), fixing `CancelledError` noise
+on client disconnect. `AuditLoggingMiddleware` and `CompressMiddleware` are
+still added the same way, unaffected. Chat prep/completion still lives in
+`utils/middleware.py`. This platform does not import or subclass any of the
+old middleware classes, so nothing here needed to change; it is recorded
+because any future overlay code that hooks into the HTTP layer by middleware
+class name must target `AppHTTPMiddleware` instead.
+
+**New optional `request` Filter hook.** Alongside `inlet`/`stream`/`outlet`,
+a Filter may now also implement `request`, called once after inlet/RAG
+processing and again before every follow-up model call after tool use.
+Dispatch is still `getattr(module, hook_name, None)`, so the grounding guard
+Filter (outlet-only) is unaffected and required no change.
+
+**File uploads gained two optional behaviors, same publication path.** A
+`JSONCodec` wrapper now parses the upload `metadata` form field, and
+image/video uploads can route to content extraction even when
+`content_extraction_engine != 'external'`. `upload_file_handler()`'s
+signature, its `Storage.upload_file()` → `file` table insert path, and
+`UPLOAD_DIR` are unchanged, so every Tool's output-publication step needed no
+change.
+
+**Dependency changes worth a build-time watch.** `backend/requirements.txt`
+drops `python-jose` in favor of `joserfc`, and renames
+`rapidocr-onnxruntime` to `rapidocr` (a package rename, not a drop-in
+version bump). `grep -rn "import jose\|rapidocr"` across `service/`,
+`openwebui_tools/`, `openwebui_functions/`, `branding/`, and `docker/` found
+no references in this overlay, so no source change was required — but the
+connected AlmaLinux builder's wheel resolution (`run_on_alma_builder.sh`)
+must re-run cleanly against the new `requirements.txt` before any bundle is
+trusted, since this was verified by source inspection, not a real dependency
+resolution. `static/themes/` (the built-in rosepine theme CSS) was removed
+upstream; nothing in this overlay referenced it.
+
+**Branding overlay verified unchanged, not just assumed.** Every exact string
+`branding/apply_branding.py` and `branding/verify_branding_overlay.py` match
+against — the `WEBUI_NAME`/`(Open WebUI)` suffix block and
+`WEBUI_FAVICON_URL` in `env.py`, `WEBUI_VERSION = APP_VERSION;` in
+`constants.ts`, the full `compareVersion()` body in `utils/index.ts`, the
+`/static/logo.png` reference in `main.py`, and `static/static/site.webmanifest`
+— were confirmed byte-for-byte identical in `v0.11.3` by direct inspection of
+the vendored tree, so the overlay required no code changes. The
+`compareVersion()` null-unsafety this platform patches (§8) is also still
+unfixed upstream between `v0.10.2` and `v0.11.3`; the defensive patch stays.
+Separately, `v0.11.3` adds `// LICENSE covers this Open WebUI ...` attribution
+comments above roughly 105 branding-surface locations plus two new
+`static/BRANDING.md` files; these are new license scaffolding, not new
+runtime strings, and do not change what the overlay's blanket
+`"Open WebUI"`/`"OpenWebUI"` substring replacement already covers, but should
+be read once before this platform's branding overlay strips the marks they
+document.
+
+**New "Open Terminal" feature — confirmed unrelated to this platform's
+Code Interpreter, confirmed disabled by default, rejected the same way a
+general shell already is (§7).** `v0.11.3` adds a real server-side terminal
+integration (`XTerminal.svelte`, `AddTerminalServerModal.svelte`,
+`TERMINAL_SERVER_CONNECTIONS` / `TERMINAL_PROXY_HEADERS` in `config.py`,
+default `[]`) that lets an admin connect an external Open Terminal MCP server
+providing actual command execution and file reads. This is not the same
+component as the "Code Interpreter/terminal side panel" referenced elsewhere
+in this document, which is still the unrelated, purely browser-side Pyodide
+panel (unchanged in `v0.11.3`). No SACAI Tool, Function, or service wires
+into `TERMINAL_SERVER_CONNECTIONS`, and it must stay unset in every `.env` for
+the same reason Stage 13 does not implement an agentic shell Tool.
+
+**Database migration risk.** Ten new Alembic revisions exist between the two
+trees, including one adding `chat.timer_at` plus indexes. `v0.11.3`'s
+CHANGELOG explains that upgrading through `v0.11.0`/`0.11.1`/`0.11.2` as
+separate steps could previously leave a database half-migrated after a failed
+step, surfacing later as a missing-column error; `v0.11.3` fixes the migration
+runner to stop cleanly at the failing revision instead. Since this platform
+upgrades in one step directly from `v0.10.2` to `v0.11.3` (one
+`alembic upgrade head` run through the full chain, not three separate
+deploys), that specific multi-step failure mode does not apply — but a full
+backup of the `openwebui-data` volume (or bind-mounted path, if migrated per
+§ below) before the offline rebuild remains mandatory regardless, per every
+intervening release's own upgrade warning.

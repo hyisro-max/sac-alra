@@ -1,7 +1,7 @@
-ARG NODE_DEPS_IMAGE=sacai/openwebui-node-deps:v0.10.2-sacalra3-amd64
-ARG PYTHON_DEPS_IMAGE=sacai/openwebui-python-deps:v0.10.2-sacalra3-amd64
+ARG NODE_DEPS_IMAGE=sacai/openwebui-node-deps:v0.11.3-sacalra1-amd64
+ARG PYTHON_DEPS_IMAGE=sacai/openwebui-python-deps:v0.11.3-sacalra1-amd64
 ARG PROJECT_NAME=SAC-ALRA
-ARG OPENWEBUI_VERSION=0.10.2
+ARG OPENWEBUI_VERSION=0.11.3
 
 FROM ${NODE_DEPS_IMAGE} AS frontend
 ARG PROJECT_NAME

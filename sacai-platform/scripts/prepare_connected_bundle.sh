@@ -68,13 +68,13 @@ docker pull --platform=linux/amd64 chromadb/chroma:1.5.9
 docker build --platform=linux/amd64 \
   "${PROXY_ARGS[@]}" \
   -f "${SACAI_ROOT}/docker/openwebui-node-deps.Dockerfile" \
-  -t sacai/openwebui-node-deps:v0.10.2-sacalra3-amd64 \
+  -t sacai/openwebui-node-deps:v0.11.3-sacalra1-amd64 \
   "${REPO_ROOT}"
 
 docker build --platform=linux/amd64 \
   "${PROXY_ARGS[@]}" \
   -f "${SACAI_ROOT}/docker/openwebui-python-deps.Dockerfile" \
-  -t sacai/openwebui-python-deps:v0.10.2-sacalra3-amd64 \
+  -t sacai/openwebui-python-deps:v0.11.3-sacalra1-amd64 \
   "${REPO_ROOT}"
 
 # ---------------------------------------------------------------------------
@@ -205,7 +205,7 @@ docker run --rm --platform=linux/amd64 \
   -e WHISPER_MODEL_DIR=/cache/whisper/models \
   -e TIKTOKEN_CACHE_DIR=/cache/tiktoken \
   -v "${SACAI_ROOT}/offline/models/openwebui-cache:/cache" \
-  sacai/openwebui-python-deps:v0.10.2-sacalra3-amd64 \
+  sacai/openwebui-python-deps:v0.11.3-sacalra1-amd64 \
   sh -c '
     python -c "
 from sentence_transformers import SentenceTransformer
@@ -234,17 +234,17 @@ nltk.download(\"punkt_tab\", download_dir=\"/cache/nltk_data\")
 # ---------------------------------------------------------------------------
 
 docker build --platform=linux/amd64 --network=none \
-  --build-arg NODE_DEPS_IMAGE=sacai/openwebui-node-deps:v0.10.2-sacalra3-amd64 \
-  --build-arg PYTHON_DEPS_IMAGE=sacai/openwebui-python-deps:v0.10.2-sacalra3-amd64 \
+  --build-arg NODE_DEPS_IMAGE=sacai/openwebui-node-deps:v0.11.3-sacalra1-amd64 \
+  --build-arg PYTHON_DEPS_IMAGE=sacai/openwebui-python-deps:v0.11.3-sacalra1-amd64 \
   -f "${SACAI_ROOT}/docker/openwebui.Dockerfile" \
-  -t sacai/openwebui:v0.10.2-sacalra3-amd64 \
+  -t sacai/openwebui:v0.11.3-sacalra1-amd64 \
   "${REPO_ROOT}"
 
 # Refuse to package an OpenWebUI runtime image containing any non-empty proxy
 # variable. This catches both uppercase and lowercase inherited image metadata.
 docker run --rm --platform=linux/amd64 \
   --entrypoint sh \
-  sacai/openwebui:v0.10.2-sacalra3-amd64 \
+  sacai/openwebui:v0.11.3-sacalra1-amd64 \
   -c '
     for variable in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
       value="$(printenv "${variable}" 2>/dev/null || true)"
@@ -308,9 +308,9 @@ docker save \
   python:3.11-slim-bookworm \
   redis:7.4.2-alpine \
   chromadb/chroma:1.5.9 \
-  sacai/openwebui-node-deps:v0.10.2-sacalra3-amd64 \
-  sacai/openwebui-python-deps:v0.10.2-sacalra3-amd64 \
-  sacai/openwebui:v0.10.2-sacalra3-amd64 \
+  sacai/openwebui-node-deps:v0.11.3-sacalra1-amd64 \
+  sacai/openwebui-python-deps:v0.11.3-sacalra1-amd64 \
+  sacai/openwebui:v0.11.3-sacalra1-amd64 \
   sacai/scientific-service:1.0.0-amd64 \
   sacai/tests:1.0.0-amd64
 
@@ -328,7 +328,7 @@ docker save \
 
 echo
 echo "Connected bundle preparation completed successfully."
-echo "OpenWebUI tag: sacai/openwebui:v0.10.2-sacalra3-amd64"
+echo "OpenWebUI tag: sacai/openwebui:v0.11.3-sacalra1-amd64"
 
 
 
@@ -402,13 +402,13 @@ echo "OpenWebUI tag: sacai/openwebui:v0.10.2-sacalra3-amd64"
 # docker build --platform=linux/amd64 \
 #   "${PROXY_ARGS[@]}" \
 #   -f "${SACAI_ROOT}/docker/openwebui-node-deps.Dockerfile" \
-#   -t sacai/openwebui-node-deps:v0.10.2-sacalra3-amd64 \
+#   -t sacai/openwebui-node-deps:v0.11.3-sacalra1-amd64 \
 #   "${REPO_ROOT}"
 
 # docker build --platform=linux/amd64 \
 #   "${PROXY_ARGS[@]}" \
 #   -f "${SACAI_ROOT}/docker/openwebui-python-deps.Dockerfile" \
-#   -t sacai/openwebui-python-deps:v0.10.2-sacalra3-amd64 \
+#   -t sacai/openwebui-python-deps:v0.11.3-sacalra1-amd64 \
 #   "${REPO_ROOT}"
 
 # # ---------------------------------------------------------------------------
@@ -488,7 +488,7 @@ echo "OpenWebUI tag: sacai/openwebui:v0.10.2-sacalra3-amd64"
 #   -e WHISPER_MODEL_DIR=/cache/whisper/models \
 #   -e TIKTOKEN_CACHE_DIR=/cache/tiktoken \
 #   -v "${SACAI_ROOT}/offline/models/openwebui-cache:/cache" \
-#   sacai/openwebui-python-deps:v0.10.2-sacalra3-amd64 \
+#   sacai/openwebui-python-deps:v0.11.3-sacalra1-amd64 \
 #   sh -c '
 #     python -c "
 # from sentence_transformers import SentenceTransformer
@@ -517,17 +517,17 @@ echo "OpenWebUI tag: sacai/openwebui:v0.10.2-sacalra3-amd64"
 # # ---------------------------------------------------------------------------
 
 # docker build --platform=linux/amd64 --network=none \
-#   --build-arg NODE_DEPS_IMAGE=sacai/openwebui-node-deps:v0.10.2-sacalra3-amd64 \
-#   --build-arg PYTHON_DEPS_IMAGE=sacai/openwebui-python-deps:v0.10.2-sacalra3-amd64 \
+#   --build-arg NODE_DEPS_IMAGE=sacai/openwebui-node-deps:v0.11.3-sacalra1-amd64 \
+#   --build-arg PYTHON_DEPS_IMAGE=sacai/openwebui-python-deps:v0.11.3-sacalra1-amd64 \
 #   -f "${SACAI_ROOT}/docker/openwebui.Dockerfile" \
-#   -t sacai/openwebui:v0.10.2-sacalra3-amd64 \
+#   -t sacai/openwebui:v0.11.3-sacalra1-amd64 \
 #   "${REPO_ROOT}"
 
 # # Refuse to package an OpenWebUI runtime image containing any non-empty proxy
 # # variable. This catches both uppercase and lowercase inherited image metadata.
 # docker run --rm --platform=linux/amd64 \
 #   --entrypoint sh \
-#   sacai/openwebui:v0.10.2-sacalra3-amd64 \
+#   sacai/openwebui:v0.11.3-sacalra1-amd64 \
 #   -c '
 #     for variable in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
 #       value="$(printenv "${variable}" 2>/dev/null || true)"
@@ -608,9 +608,9 @@ echo "OpenWebUI tag: sacai/openwebui:v0.10.2-sacalra3-amd64"
 #   python:3.11-slim-bookworm \
 #   redis:7.4.2-alpine \
 #   chromadb/chroma:1.5.9 \
-#   sacai/openwebui-node-deps:v0.10.2-sacalra3-amd64 \
-#   sacai/openwebui-python-deps:v0.10.2-sacalra3-amd64 \
-#   sacai/openwebui:v0.10.2-sacalra3-amd64 \
+#   sacai/openwebui-node-deps:v0.11.3-sacalra1-amd64 \
+#   sacai/openwebui-python-deps:v0.11.3-sacalra1-amd64 \
+#   sacai/openwebui:v0.11.3-sacalra1-amd64 \
 #   sacai/scientific-service:1.0.0-amd64 \
 #   sacai/tests:1.0.0-amd64
 
@@ -628,4 +628,4 @@ echo "OpenWebUI tag: sacai/openwebui:v0.10.2-sacalra3-amd64"
 
 # echo
 # echo "Connected bundle preparation completed successfully."
-# echo "OpenWebUI tag: sacai/openwebui:v0.10.2-sacalra3-amd64"
+# echo "OpenWebUI tag: sacai/openwebui:v0.11.3-sacalra1-amd64"
