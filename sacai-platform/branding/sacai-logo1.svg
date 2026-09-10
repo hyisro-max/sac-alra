@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title description">
+  <title id="title">SACAI</title>
+  <description id="description">A lunar disc crossed by an orbital path.</description>
+  <defs>
+    <linearGradient id="space" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101936"/>
+      <stop offset="1" stop-color="#283e78"/>
+    </linearGradient>
+    <linearGradient id="moon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f4f7ff"/>
+      <stop offset="1" stop-color="#9fb4da"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="52" fill="url(#space)"/>
+  <circle cx="128" cy="128" r="67" fill="url(#moon)"/>
+  <circle cx="105" cy="101" r="12" fill="#738ab4" opacity=".55"/>
+  <circle cx="151" cy="146" r="18" fill="#738ab4" opacity=".4"/>
+  <circle cx="148" cy="91" r="7" fill="#738ab4" opacity=".45"/>
+  <ellipse cx="128" cy="128" rx="104" ry="43" fill="none" stroke="#51d6d1" stroke-width="9" transform="rotate(-19 128 128)"/>
+  <circle cx="218" cy="91" r="11" fill="#ffcc66"/>
+</svg>
+

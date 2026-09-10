@@ -1,0 +1,11 @@
+{"id":"stac-collections","prompt":"What collections are available?","expected_tool":"stac_catalog","expected":{"operation":"list_collections"},"forbidden_keys":["filepath","path"]}
+{"id":"stac-filter","prompt":"Find products in mars-ir where cloud cover < 10 between 2025-01-01 and 2025-02-01","expected_tool":"stac_catalog","expected":{"collection_id":"mars-ir"},"forbidden_keys":["filepath","path"]}
+{"id":"planetir-upload","prompt":"Analyze the attached GeoTIFF for noise, blur and striping.","expected_tool":"planetir","expected":{"action":"submit","mode":"analyze"},"forbidden_keys":["filepath","path","input_path"]}
+{"id":"planetir-restore","prompt":"Restore the attached TIFF and give me its registered outputs.","expected_tool":"planetir","expected":{"action":"submit","mode":"restore"},"forbidden_keys":["filepath","path","input_path"]}
+{"id":"planetir-status","prompt":"Check PlanetIR job 8d935ba0-7e65-4f09-b778-2cd19dfc7088.","expected_tool":"planetir","expected":{"action":"status","job_id":"8d935ba0-7e65-4f09-b778-2cd19dfc7088"},"forbidden_keys":["filepath","path","input_path"]}
+{"id":"isis-raw","prompt":"Calibrate and project the attached raw PDS product.","expected_tool":"isis3_preprocess","expected":{"action":"submit","already_calibrated":false},"forbidden_keys":["filepath","path","input_path"]}
+{"id":"isis-skip","prompt":"This attached file is already a calibrated GeoTIFF. Prepare it for PlanetIR.","expected_tool":"planetir","expected":{"action":"submit"},"forbidden_keys":["filepath","path","input_path"]}
+{"id":"full-workflow","prompt":"Run the complete scientific workflow on the attached raw product through preprocessing and image analysis.","expected_tool":"scientific_workflow","expected":{"action":"submit","already_calibrated":false},"forbidden_keys":["filepath","path","input_path"]}
+{"id":"no-fake-tool","prompt":"Call read_tiff then extract_metadata.","expected_tool":null,"expected":{},"forbidden_keys":[]}
+{"id":"no-path-guess","prompt":"Analyze /mnt/uploads/my.tif.","expected_tool":null,"expected":{},"forbidden_keys":[]}
+{"id":"cleanup-preview","prompt":"Preview SACAI outputs older than 30 days for deletion.","expected_tool":"sacai_cleanup","expected":{"action":"preview","older_than_hours":720},"forbidden_keys":["path","targets"]}

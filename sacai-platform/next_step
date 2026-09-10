@@ -1,0 +1,460 @@
+# SAC-ALRA: next steps in exact order
+
+This guide replaces the earlier version. The Compose stack intentionally has no
+`ollama` service. Ollama already runs outside this project and uses these model
+stores:
+
+- `10.61.247.253`: `/data/.ollama`; SAC-ALRA web port `2018`
+- `10.61.247.254`: `/data1/jai/.ollama`; SAC-ALRA web port `3000`
+
+The examples assume both existing Ollama APIs listen on port `11434`. The ports
+`2018` and `3000` are the SAC-ALRA browser ports, not Ollama model-directory
+ports. If an Ollama API actually uses another port, change only
+`OLLAMA_BASE_URL` in that server's `.env`.
+
+Never run the connected bundle builder on either offline production server.
+
+## Immediate recovery for the current proxy-contaminated container
+
+This temporary recovery can restore Chroma access before the permanent bundle
+is rebuilt. In the current production directory, keep its existing image tag
+unchanged and add all six entries below to the `openwebui.environment` section
+of its current `docker-compose.yml`:
+
+```yaml
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      NO_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      no_proxy: ""
+```
+
+Then recreate only OpenWebUI from the same image. A restart is insufficient
+because container environment variables are fixed when the container is
+created:
+
+```bash
+docker compose --env-file .env -f docker-compose.yml config --quiet
+docker compose --env-file .env -f docker-compose.yml up -d \
+  --no-build --force-recreate openwebui
+docker compose --env-file .env -f docker-compose.yml exec -T openwebui sh -c '
+  for variable in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
+    value="$(printenv "${variable}" 2>/dev/null || true)"
+    printf "%s=<%s>\n" "${variable}" "${value}"
+  done'
+```
+
+Every value between `<` and `>` must be empty. Then run the current Chroma
+diagnostic. This runtime override is safe even when the old image metadata still
+contains the builder proxy.
+
+The permanent correction below uses the new image tag
+`sacai/openwebui:v0.10.2-sacalra3-amd64`. Do not retag an old image with that
+name; generate and transfer the new archive from the connected builder.
+
+## Part A — Mac
+
+### 1. Create the corrected AlmaLinux source archive
+
+On the Mac, from the repository root:
+
+```bash
+cd /Users/hiya_38/ISRO_SAC/sacai
+chmod +x sacai-platform/scripts/*.sh
+./sacai-platform/scripts/create_alma_source_bundle_macos.sh
+```
+
+The script excludes `.git`, `.github`, Git metadata, caches, and Mac files. It
+creates:
+
+```text
+sacai-platform/dist/sacai-alma-builder-source.tar.gz
+sacai-platform/dist/sacai-alma-builder-source.tar.gz.sha256
+```
+
+### 2. Copy both files to the connected AlmaLinux 9 AMD64 machine
+
+Use the approved transfer method. Do not copy only individual edited files;
+the archive and its checksum are one matched pair.
+
+## Part B — connected AlmaLinux 9 AMD64 machine
+
+### 3. Verify and extract the new source archive
+
+```bash
+mkdir -p "$HOME/sac-alra-builder"
+cd "$HOME/sac-alra-builder"
+sha256sum --check sacai-alma-builder-source.tar.gz.sha256
+tar -xzf sacai-alma-builder-source.tar.gz
+cd sacai-alma-builder
+sha256sum --check SOURCE_MANIFEST.sha256
+```
+
+Stop if either checksum command reports a failure.
+
+### 4. Confirm the builder platform and Docker
+
+```bash
+uname -m
+cat /etc/os-release
+docker version
+docker compose version
+docker info
+```
+
+The machine must be AlmaLinux 9.x and `uname -m` must print `x86_64`.
+
+### 5. Confirm the connected-builder-only proxy
+
+Only temporary build/download containers on the internet-connected AlmaLinux
+machine use this proxy. The builder defaults to this value when
+`SACAI_BUILD_PROXY_URL` is unset:
+
+```text
+http://http.docker.internal:3128
+```
+
+The build script passes this proxy to Node, Python, pip, apt, and model-cache
+download operations. Docker image pulls are performed by Docker Desktop itself,
+not by Dockerfile build arguments.
+
+Seeing the proxy string in this guide or in
+`scripts/prepare_connected_bundle.sh` is expected. Seeing a non-empty value for
+`HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, or `https_proxy` in the production
+OpenWebUI container is a runtime proxy leak and must fail the deployment gate.
+The final Docker stage and Compose environment clear all uppercase and lowercase
+variants before OpenWebUI starts.
+
+On this network, do not export an empty proxy value. If it was previously set
+empty, restore the builder default:
+
+```bash
+unset SACAI_BUILD_PROXY_URL
+```
+
+In Docker Desktop, open **Settings → Proxies** and configure both the Docker
+Desktop proxy and the Containers proxy using the organization-approved
+system/manual proxy. Prefer **System proxy** and **Same as host proxy** when
+those are the approved settings. Apply the change, restart Docker Desktop if it
+requests that, and prove registry access before running the bundle builder:
+
+```bash
+docker pull --platform=linux/amd64 python:3.11-slim-bookworm
+```
+
+Do not continue until it succeeds. A `registry-1.docker.io` TLS handshake
+timeout occurs before any Dockerfile instruction and cannot be repaired with a
+project `--build-arg`.
+
+To use a different container proxy:
+
+```bash
+export SACAI_BUILD_PROXY_URL=http://different-proxy.example:3128
+```
+
+Use a direct connection only on a different builder where direct HTTPS has
+already been proven:
+
+```bash
+export SACAI_BUILD_PROXY_URL=
+```
+
+The builder next tests Alpine access from a temporary container. It does not
+override `http.docker.internal` with `host-gateway`, because Docker Desktop owns
+that internal DNS name. If the preflight fails, fix Docker Desktop proxy/DNS;
+restarting the complete bundle build will not repair an unreachable proxy.
+
+### 6. Build every Linux/AMD64 offline dependency
+
+```bash
+cd "$HOME/sac-alra-builder/sacai-alma-builder/sacai-platform"
+chmod +x scripts/*.sh
+./scripts/run_on_alma_builder.sh
+```
+
+The builder downloads every direct and transitive Python dependency as a
+compatible Linux/AMD64 Python 3.11 wheel. The offline images install those
+wheels with `pip install --no-index`, run `pip check`, and run the test suite.
+It also stages `libexpat1` under `offline/apt-cache/rootfs/`. It does not pull,
+copy, or package Ollama or its models.
+
+### 7. Verify the generated offline bundle
+
+```bash
+test -s offline/requirements-linux-amd64.lock.txt
+test -s offline/WHEELHOUSE_SHA256SUMS
+test -s offline/apt-cache/PACKAGES.txt
+test -e offline/apt-cache/rootfs/lib/x86_64-linux-gnu/libexpat.so.1
+find offline/wheelhouse -maxdepth 1 -name '*.whl' | wc -l
+./scripts/verify_offline_bundle.sh
+```
+
+The wheel count must be greater than zero and verification must pass.
+
+### 8. Create and verify the production transfer archive
+
+Replace the example destination with the mounted approved transfer medium:
+
+```bash
+./scripts/create_offline_transfer_archive.sh /mnt/encrypted-transfer
+cd /mnt/encrypted-transfer
+sha256sum --check sacai-rhel95-offline-amd64.tar.sha256
+sync
+```
+
+Transfer the `.tar` and `.tar.sha256` files to both production servers.
+
+## Part C — perform these common steps on both offline servers
+
+Complete steps 9 through 17 first on `10.61.247.253`, then repeat them on
+`10.61.247.254`.
+
+### 9. Verify the host and the transfer archive
+
+```bash
+uname -m
+cat /etc/redhat-release
+docker version
+docker compose version
+cd /mnt/encrypted-transfer
+sha256sum --check sacai-rhel95-offline-amd64.tar.sha256
+```
+
+Stop on a checksum failure. The production architecture must be `x86_64`.
+
+### 10. Verify the already-running Ollama API before touching SAC-ALRA
+
+On `10.61.247.253`:
+
+```bash
+test -d /data/.ollama
+curl --fail --silent --show-error http://10.61.247.253:11434/api/tags
+```
+
+On `10.61.247.254`:
+
+```bash
+test -d /data1/jai/.ollama
+curl --fail --silent --show-error http://10.61.247.254:11434/api/tags
+```
+
+The response must contain the expected model tags. If it fails, stop and fix
+the existing Ollama listener or firewall first. SAC-ALRA does not mount these
+directories and does not manage the Ollama process.
+
+### 11. Extract the corrected bundle into a new local directory
+
+Do not overwrite the directory that failed at old step 21. Keeping it intact
+makes rollback possible.
+
+```bash
+mkdir -p "$HOME/sac-alra-production-v2"
+tar -xf /mnt/encrypted-transfer/sacai-rhel95-offline-amd64.tar \
+  -C "$HOME/sac-alra-production-v2"
+cd "$HOME/sac-alra-production-v2/sacai-alma-builder/sacai-platform"
+./scripts/verify_offline_bundle.sh
+```
+
+### 12. Create the correct host-specific `.env`
+
+On `10.61.247.253`:
+
+```bash
+cp .env.server-253.example .env
+```
+
+On `10.61.247.254`:
+
+```bash
+cp .env.server-254.example .env
+```
+
+Generate two different secrets on each server:
+
+```bash
+openssl rand -hex 32
+openssl rand -hex 32
+vi .env
+```
+
+Put the first value in `WEBUI_SECRET_KEY` and the second in
+`SACAI_INTERNAL_TOKEN`. Confirm these host-specific values:
+
+```text
+10.61.247.253: PROJECT_NAME=SAC-ALRA, SACAI_WEB_PORT=2018,
+                OLLAMA_BASE_URL=http://10.61.247.253:11434
+10.61.247.254: PROJECT_NAME=SAC-ALRA, SACAI_WEB_PORT=3000,
+                OLLAMA_BASE_URL=http://10.61.247.254:11434
+```
+
+If every OpenWebUI instance should list models from both Ollama servers,
+uncomment this optional line in both `.env` files:
+
+```dotenv
+OLLAMA_BASE_URLS=http://10.61.247.253:11434;http://10.61.247.254:11434
+```
+
+### 13. Load images and validate Compose without internet
+
+```bash
+./scripts/load_offline_images.sh
+docker compose --env-file .env -f docker-compose.yml config --quiet
+```
+
+There should be no Ollama image and no compose `ollama` service. That is
+intentional.
+
+### 14. Rebuild and start SAC-ALRA offline
+
+Without ISIS3:
+
+```bash
+./scripts/rebuild_offline.sh
+```
+
+With a completely pre-staged ISIS3 image and data:
+
+```bash
+COMPOSE_PROFILES=isis ./scripts/rebuild_offline.sh
+```
+
+The OpenWebUI build has an 8 GiB Node heap. The Docker VM or host still needs
+enough physical memory for that build.
+
+The rebuild is deliberately `--no-cache`, force-recreates the container, checks
+that its immutable image ID matches the newly built `sacalra3` tag, and fails if
+any uppercase or lowercase proxy variable has a non-empty runtime value. Do not
+use `docker history` timestamps as the acceptance test; use the image-ID and
+environment checks printed by `rebuild_offline.sh`.
+
+### 15. Check Chroma first, then OpenWebUI
+
+```bash
+docker compose --env-file .env -f docker-compose.yml ps
+docker compose --env-file .env -f docker-compose.yml logs \
+  --tail=100 chroma openwebui sacai-api planetir-worker notebook-worker redis
+./scripts/diagnose_chroma.sh
+```
+
+Do not add `ollama` to the compose log command; it is not a compose service.
+The corrected Chroma container stores data at `/data`, exposes the v2 heartbeat,
+and must become `healthy` before OpenWebUI starts. OpenWebUI has a two-minute
+startup grace period for its offline caches and database migrations.
+
+If `diagnose_chroma.sh` still fails, save and send its complete output. Do not
+delete the `chroma-data` volume: it may contain indexed user data and the logs
+must identify the actual failure before any recovery action.
+
+### 16. Confirm the external Ollama connection from the container
+
+This check is already included at the end of `diagnose_chroma.sh`. It must print
+the configured `/api/tags` URL and HTTP status `200`.
+
+If this OpenWebUI data volume was previously started with
+`http://ollama:11434`, its database may retain that old admin setting. Once the
+UI opens, go to **Admin Settings → Connections → Ollama**, replace the old URL
+with the same external URL from `.env`, and save. Do not reset the whole
+OpenWebUI database to change one connection.
+
+### 17. Open the correct SAC-ALRA web address
+
+For server `10.61.247.253`:
+
+```text
+http://10.61.247.253:2018
+```
+
+For server `10.61.247.254`:
+
+```text
+http://10.61.247.254:3000
+```
+
+Each SAC-ALRA deployment has its own OpenWebUI, Chroma, Redis, job, and audit
+data. Only Ollama model serving is external to the stack.
+
+After installing the `sacalra3` frontend, open a private browser window or clear
+the site's cached application data so an older JavaScript bundle is not reused.
+Confirm both corrected frontend paths:
+
+```bash
+curl --fail --silent --show-error \
+  http://localhost:"$(sed -n 's/^SACAI_WEB_PORT=//p' .env)"/static/sacai-logo.svg \
+  | head -1
+```
+
+The response must begin with `<svg`. Then create and save a trivial Tool while
+the browser Network panel is open. The format request and the subsequent
+`POST /api/v1/tools/create` must both succeed. A `localeCompare` error at
+`compareVersion` means the browser or container is still serving an older
+frontend image.
+
+## Part D — finish application setup after both deployments are healthy
+
+### 18. Create the first administrator on each instance
+
+Use the approved organization account policy. Do not expose Redis, Chroma, or
+the internal SAC-ALRA API to employee networks.
+
+### 19. Install the Tools
+
+In **Workspace → Tools → Create Tool**, install:
+
+1. `openwebui_tools/stac_catalog.py`
+2. `openwebui_tools/planetir.py`
+3. `openwebui_tools/scientific_workflow.py`
+4. `openwebui_tools/isis3_preprocess.py` only when ISIS is enabled
+5. `openwebui_tools/admin_cleanup.py` only for an admin-restricted model
+6. `openwebui_tools/jupyter_runtime.py` only when the external Jupyter runtime is approved
+
+If `stac_catalog` already exists, edit that same Tool record and replace its
+complete source with the new `openwebui_tools/stac_catalog.py`; do not create a
+second STAC Tool. Open its Valves, inspect the live schema, and confirm the
+`sun incidence` alias maps to the real catalog field. The supplied default is
+`view:incidence_angle`.
+
+For service-backed Tools, configure:
+
+```text
+service_url = http://sacai-api:8000
+service_token = the exact SACAI_INTERNAL_TOKEN from this server's .env
+artifact_root = /data/outputs
+```
+
+For `jupyter_runtime`, also set `jupyter_server_url`, its dedicated token,
+`kernel_name`, and an exact `allowed_notebooks` JSON mapping. Start with one
+known notebook. Users provide only its friendly code name and a `product_id`.
+See `stage-14/README.md`; do not place the Jupyter address or token in `.env` or
+the Tool source.
+
+### 20. Install the grounding Filter and prompts
+
+Create a Function from `openwebui_functions/grounding_guard.py`, configure its
+service URL and token as above, and enable it on scientific models. Copy the
+appropriate complete prompt into each Workspace model:
+
+- `prompts/planetir_system_prompt.md`
+- `prompts/coder_system_prompt.md`
+
+### 21. Run acceptance tests
+
+In order: list STAC collections; inspect the TMC collection/schema; request sun
+incidence values for two known product IDs; request them for `2020 TMC`; verify
+that missing values, unknown IDs, and any result truncation are explicit; test
+an unsupported STAC field; upload the reference GeoTIFF; submit and poll
+PlanetIR; download its JSON/PNG/GeoTIFF outputs; test user isolation; and verify
+the numeric grounding warning. If ISIS is enabled, test one raw mission product
+and one already-calibrated GeoTIFF.
+
+When Jupyter integration is enabled, also run Tool actions `list` and `check`,
+submit one allowlisted notebook/product ID, poll it to completion, download its
+executed notebook/result, and verify cooperative cancellation with a slow test
+notebook.
+
+### 22. Record the accepted deployment
+
+Append a dated entry to `BUILD_LOG.md` with host address, web port, external
+Ollama URL and model tags, image IDs, bundle checksums, Docker/RHEL versions,
+test results, and `PROJECT_NAME=SAC-ALRA`. Keep the original transfer archive
+read-only through the rollback window.

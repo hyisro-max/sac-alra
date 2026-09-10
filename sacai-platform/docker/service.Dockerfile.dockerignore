@@ -1,0 +1,14 @@
+*
+!sacai-platform/
+!sacai-platform/offline/
+!sacai-platform/offline/wheelhouse/
+!sacai-platform/offline/wheelhouse/**
+!sacai-platform/offline/apt-cache/
+!sacai-platform/offline/apt-cache/rootfs/
+!sacai-platform/offline/apt-cache/rootfs/lib/
+!sacai-platform/offline/apt-cache/rootfs/lib/x86_64-linux-gnu/
+!sacai-platform/offline/apt-cache/rootfs/lib/x86_64-linux-gnu/**
+!sacai-platform/service/
+!sacai-platform/service/app/
+!sacai-platform/service/app/**
+!sacai-platform/service/requirements.txt

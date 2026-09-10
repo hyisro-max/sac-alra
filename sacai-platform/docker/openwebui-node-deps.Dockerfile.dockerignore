@@ -1,0 +1,9 @@
+*
+!source-code/
+!source-code/open-webui/
+!source-code/open-webui/package.json
+!source-code/open-webui/package-lock.json
+!source-code/open-webui/scripts/
+!source-code/open-webui/scripts/**
+!source-code/open-webui/static/
+!source-code/open-webui/static/**

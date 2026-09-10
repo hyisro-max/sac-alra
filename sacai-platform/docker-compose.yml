@@ -1,0 +1,204 @@
+name: sacai
+
+services:
+  openwebui:
+    build:
+      context: ..
+      dockerfile: sacai-platform/docker/openwebui.Dockerfile
+      network: none
+      args:
+        PROJECT_NAME: "${PROJECT_NAME:-SAC-ALRA}"
+        OPENWEBUI_VERSION: "0.10.2"
+    image: sacai/openwebui:v0.10.2-sacalra3-amd64
+    restart: unless-stopped
+    ports:
+      - "${SACAI_WEB_PORT:-3000}:8080"
+    environment:
+      WEBUI_NAME: "${PROJECT_NAME:-SAC-ALRA}"
+      WEBUI_SECRET_KEY: "${WEBUI_SECRET_KEY:?set WEBUI_SECRET_KEY in .env}"
+      # Explicit runtime overrides also protect against a stale dependency
+      # image or Docker client proxy configuration on the production host.
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      NO_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      no_proxy: ""
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:?set the existing Ollama API URL in .env}"
+      OLLAMA_BASE_URLS: "${OLLAMA_BASE_URLS:-}"
+      OFFLINE_MODE: "true"
+      VECTOR_DB: chroma
+      CHROMA_HTTP_HOST: chroma
+      CHROMA_HTTP_PORT: "8000"
+      CHROMA_TENANT: default_tenant
+      CHROMA_DATABASE: default_database
+      AUDIT_LOG_LEVEL: REQUEST_RESPONSE
+      AUDIT_INCLUDED_PATHS: "tools,functions,models,files,chat"
+      ENABLE_AUDIT_LOGS_FILE: "true"
+      ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS: "false"
+      NLTK_DATA: /app/backend/data/cache/nltk_data
+      LANGGRAPH_STRICT_MSGPACK: "true"
+    volumes:
+      - openwebui-data:/app/backend/data
+      - ./offline/models/openwebui-cache:/app/backend/data/cache
+      - sacai-outputs:/data/outputs:ro
+      - ./openwebui_tools:/opt/sacai/tools:ro
+      - ./openwebui_functions:/opt/sacai/functions:ro
+      - ./prompts:/opt/sacai/prompts:ro
+    depends_on:
+      sacai-api:
+        condition: service_healthy
+      chroma:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl --silent --fail http://localhost:8080/health | jq -e '.status == true' >/dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  sacai-api:
+    build:
+      context: ..
+      dockerfile: sacai-platform/docker/service.Dockerfile
+      network: none
+    image: sacai/scientific-service:1.1.0-amd64
+    restart: unless-stopped
+    command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+    environment: &service-environment
+      SACAI_INTERNAL_TOKEN: "${SACAI_INTERNAL_TOKEN:?set SACAI_INTERNAL_TOKEN in .env}"
+      SACAI_REDIS_URL: redis://redis:6379/0
+      SACAI_RESULT_BACKEND_URL: redis://redis:6379/1
+      SACAI_UPLOAD_ROOT: /app/backend/data/uploads
+      SACAI_OUTPUT_ROOT: /data/outputs
+      SACAI_TOOL_VERSIONS_ROOT: /data/tool_versions
+      SACAI_AUDIT_DB_PATH: /data/audit/sacai-audit.sqlite3
+      SACAI_GRAPH_DB_PATH: /data/audit/sacai-graphs.sqlite3
+      SACAI_MAX_QUEUED_JOBS: "${SACAI_MAX_QUEUED_JOBS:-100}"
+      SACAI_MAX_USER_JOBS: "${SACAI_MAX_USER_JOBS:-5}"
+      SACAI_MAX_INPUT_BYTES: "${SACAI_MAX_INPUT_BYTES:-10737418240}"
+      SACAI_MAX_SAMPLE_PIXELS: "${SACAI_MAX_SAMPLE_PIXELS:-4000000}"
+      SACAI_JOB_TIME_LIMIT_SECONDS: "${SACAI_JOB_TIME_LIMIT_SECONDS:-3600}"
+      SACAI_JOB_SOFT_TIME_LIMIT_SECONDS: "${SACAI_JOB_SOFT_TIME_LIMIT_SECONDS:-3300}"
+      SACAI_ISIS_TIME_LIMIT_SECONDS: "${SACAI_ISIS_TIME_LIMIT_SECONDS:-7200}"
+      SACAI_ISIS_SOFT_TIME_LIMIT_SECONDS: "${SACAI_ISIS_SOFT_TIME_LIMIT_SECONDS:-6900}"
+      SACAI_NOTEBOOK_TIME_LIMIT_SECONDS: "${SACAI_NOTEBOOK_TIME_LIMIT_SECONDS:-4200}"
+      SACAI_NOTEBOOK_SOFT_TIME_LIMIT_SECONDS: "${SACAI_NOTEBOOK_SOFT_TIME_LIMIT_SECONDS:-3900}"
+      SACAI_CLEANUP_MIN_AGE_HOURS: "${SACAI_CLEANUP_MIN_AGE_HOURS:-168}"
+      SACAI_ISIS_COMMAND: "python /opt/sacai/isis_preprocess.py --input {input} --output {output}"
+      LANGGRAPH_STRICT_MSGPACK: "true"
+    volumes:
+      - openwebui-data:/app/backend/data:ro
+      - sacai-outputs:/data/outputs
+      - sacai-audit:/data/audit
+      - sacai-tool-versions:/data/tool_versions
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  planetir-worker:
+    image: sacai/scientific-service:1.1.0-amd64
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=planetir_cpu", "--concurrency=${PLANETIR_CONCURRENCY:-2}", "--hostname=planetir@%h"]
+    environment: *service-environment
+    volumes:
+      - openwebui-data:/app/backend/data:ro
+      - sacai-outputs:/data/outputs
+      - sacai-audit:/data/audit
+      - sacai-tool-versions:/data/tool_versions
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${PLANETIR_CPU_LIMIT:-16}"
+          memory: "${PLANETIR_MEMORY_LIMIT:-64G}"
+
+  isis-worker:
+    profiles: ["isis"]
+    build:
+      context: ..
+      dockerfile: sacai-platform/docker/isis-worker.Dockerfile
+      network: none
+    image: sacai/isis-worker:8.3.0-sacai1-amd64
+    restart: unless-stopped
+    environment:
+      <<: *service-environment
+      ISISROOT: /opt/isis
+      ISISDATA: /opt/isisdata
+      ISIS_INGEST_COMMAND: "${ISIS_INGEST_COMMAND:-}"
+      ISIS_CALIBRATE_COMMAND: "${ISIS_CALIBRATE_COMMAND:-}"
+      ISIS_SPICE_COMMAND: "${ISIS_SPICE_COMMAND:-}"
+      ISIS_PROJECT_COMMAND: "${ISIS_PROJECT_COMMAND:-}"
+    volumes:
+      - openwebui-data:/app/backend/data:ro
+      - sacai-outputs:/data/outputs
+      - sacai-audit:/data/audit
+      - sacai-tool-versions:/data/tool_versions
+      - "${ISISDATA_HOST_PATH:-./offline/isisdata}:/opt/isisdata:ro"
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${ISIS_CPU_LIMIT:-16}"
+          memory: "${ISIS_MEMORY_LIMIT:-64G}"
+
+  notebook-worker:
+    image: sacai/scientific-service:1.1.0-amd64
+    restart: unless-stopped
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=notebook_remote", "--concurrency=${NOTEBOOK_CONCURRENCY:-4}", "--hostname=notebook@%h"]
+    environment: *service-environment
+    volumes:
+      - sacai-outputs:/data/outputs
+      - sacai-audit:/data/audit
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${NOTEBOOK_CPU_LIMIT:-4}"
+          memory: "${NOTEBOOK_MEMORY_LIMIT:-8G}"
+
+  redis:
+    image: redis:7.4.2-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  chroma:
+    image: chromadb/chroma:1.5.9
+    restart: unless-stopped
+    environment:
+      ANONYMIZED_TELEMETRY: "false"
+      IS_PERSISTENT: "true"
+    volumes:
+      - chroma-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+volumes:
+  openwebui-data:
+  sacai-outputs:
+  sacai-audit:
+  sacai-tool-versions:
+  redis-data:
+  chroma-data:

@@ -1,0 +1,7 @@
+*
+!source-code/
+!source-code/open-webui/
+!source-code/open-webui/**
+!sacai-platform/
+!sacai-platform/branding/
+!sacai-platform/branding/**

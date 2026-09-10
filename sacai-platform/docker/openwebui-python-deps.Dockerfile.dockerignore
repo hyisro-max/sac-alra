@@ -1,0 +1,7 @@
+*
+!source-code/
+!source-code/open-webui/
+!source-code/open-webui/backend/
+!source-code/open-webui/backend/requirements.txt
+!source-code/pystac-client/
+!source-code/pystac-client/**
