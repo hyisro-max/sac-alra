@@ -54,6 +54,8 @@ The categories in the mandate are used explicitly below. A component can have a 
 | System prompts | **Versioned prompt files + OpenWebUI model config** | Git stores the canonical prompt. An admin copies it into Workspace → Models → System Prompt or uses the authenticated model update API. The database remains the runtime source because `ModelEditor.svelte` writes `params.system` and request middleware applies it. |
 | Future DL models | **Tool adapter + routed worker queue** | Each future model has one orchestrating Tool method and an inference wrapper in the service. Weights live under a read-only model volume, never in Tool source or Knowledge. GPU queue/concurrency and resource Valves are reused. |
 | Future agentic file editing | **Later-stage scoped Tool + sandbox service; not implemented now** | Stage 13 only designs this. A future service will resolve all paths below one configured project root, use separate read/write capabilities, require diffs and explicit approval for writes/deletes, and append every operation to the audit trail. It will not expose a general shell or unrestricted filesystem Tool. |
+| Lunar DEM generation (ISIS → ASP → OTB) | **Two Tool actions in one adapter + two new backend/worker container pairs, each mission/sensor-agnostic by construction** | `lunar_dem_pipeline` exposes `submit_dem`/`submit_orthorectify`/`status`/`cancel`. `submit_dem` takes two already-ISIS-preprocessed (spice-stage, not map-projected) stereo images and queues Ames Stereo Pipeline bundle-adjustment/correlation/`point2dem` on the isolated `asp_cpu` queue, using `sacai/asp-runtime` (already built; installs ISIS 8.3.0 alongside it, matching `sacai/isis-runtime`). `submit_orthorectify` takes one image and a DEM (typically a completed DEM job's published artifact) and queues an Orfeo ToolBox (CNES; the user's "OTV" meant OTB) stage on the isolated `otb_cpu` queue. Both stages run the same operator-configured-command-template pattern as the existing ISIS wrapper (`isis/isis_preprocess.py`): `dem/asp_stereo.py` and `dem/otb_postprocess.py` hardcode no ASP/OTB flags, sensor session type, or algorithm choice — only the placeholders (`{left}`/`{right}`/`{prefix}`/`{output}` for ASP; `{input}`/`{dem}`/`{output}` for OTB) that the operator's own command templates (`ASP_BUNDLE_ADJUST_COMMAND`, `ASP_STEREO_COMMAND`, `ASP_POINT2DEM_COMMAND`, `OTB_POSTPROCESS_COMMAND`) fill in per deployment. This is what keeps the pipeline "not specific to a mission or sensor": the generic `isis-worker` (ISIS 8.3.0) stays the default ISIS path for any mission it can ingest, and DEM/orthorectification never branch on mission identity at all. |
+| Chandrayaan-2 TMC-2 (mission-specific ISIS variant) | **Optional Compose profile, opt-in per job, never the default** | `ch2-worker` (`profiles: ["ch2"]`) layers the same generic `isis/isis_preprocess.py` wrapper onto `sacai/ch2-runtime` (ISIS 10 RC2, a separate conda env and a separate `ISISDATA` tree — not proven compatible with the ISIS 8.3.0 data area, so kept distinct rather than merged). A submitted `isis3` job only routes to the isolated `ch2_cpu` queue when it explicitly sets `options.mission == "ch2_tmc2"`; every other `isis3`/`lunar_dem`/`orthorectify` job keeps using the generic path regardless of which mission or sensor it came from. Rejected: making `ch2-runtime` (ISIS 10 RC2) the default ISIS worker, which would special-case every non-Chandrayaan-2 job around one mission's data area instead of the reverse. |
 
 ## 3. Queue and resource policy
 
@@ -65,8 +67,13 @@ Default queues and caps:
 |---|---:|---:|---:|
 | `planetir_cpu` | 2 | 8 CPU, 32 GiB RAM | 60 minutes |
 | `isis_cpu` | 1 | 16 CPU, 64 GiB RAM | 120 minutes |
+| `asp_cpu` | 1 | 16 CPU, 64 GiB RAM | 200 minutes |
+| `otb_cpu` | 1 | 8 CPU, 32 GiB RAM | 60 minutes |
+| `ch2_cpu` (opt-in, `profiles: ["ch2"]`) | 1 | 16 CPU, 64 GiB RAM | 120 minutes |
 | `gpu` | 1 | 1 H100 allocation, 64 GiB host RAM | 60 minutes |
 | `maintenance` | 1 | 2 CPU, 4 GiB RAM | 30 minutes |
+
+Stereo correlation (`asp_cpu`) gets the longest default time limit of any queue: bundle adjustment plus `parallel_stereo` correlation over a full lunar stereo pair routinely runs far longer than a single-image ISIS calibration pass. Concurrency stays at 1 for `asp_cpu`/`otb_cpu`/`ch2_cpu`, matching `isis_cpu`'s existing precedent of capping the heaviest, least-parallelizable stages hardest.
 
 These are conservative starting points, not hidden constants. Compose environment variables and service Valves configure accepted file size, queue name, timeouts and concurrency. Operators measure real imagery before raising them. Redis itself never executes scientific code. The API rejects new submissions when queued-job count or per-user outstanding-job limits are exceeded; accepted excess work waits instead of consuming more RAM.
 
@@ -261,3 +268,53 @@ deploys), that specific multi-step failure mode does not apply — but a full
 backup of the `openwebui-data` volume (or bind-mounted path, if migrated per
 § below) before the offline rebuild remains mandatory regardless, per every
 intervening release's own upgrade warning.
+
+## 13. Lunar DEM pipeline: build/test gaps found while wiring it in
+
+Recorded here rather than silently fixed, because each needs either a real
+build/test run this session cannot perform, or a decision only whoever
+maintains the affected file should make.
+
+- **`otb-runtime` is not yet built.** Unlike `asp-runtime`/`ch2-runtime`/
+  `isis-runtime`, no `sacai/otb-runtime` image exists on this deployment yet.
+  `docker/otb-runtime.Dockerfile` installs Orfeo ToolBox from its conda-forge
+  `otb` package the same way `asp-runtime.Dockerfile` installs
+  `stereo-pipeline`, but its conda environment's own Python version has not
+  been checked against the offline wheelhouse (built for Python 3.11/
+  linux-amd64). `asp-worker`/`ch2-worker` reuse `isis-worker`'s already-proven
+  Python compatibility (ASP 3.5.0 installs ISIS 8.3.0 alongside it); OTB has
+  no such precedent here. Build `otb-runtime` on the connected AlmaLinux
+  builder first; if `pip install --no-index` fails in `otb-worker.Dockerfile`
+  on an ABI/version mismatch, either pin `otb-runtime.Dockerfile` to
+  `python=3.11` explicitly and rebuild, or run OTB out-of-process from a
+  plain `scientific-service`-based container that shells out to the `otb`
+  conda env's binaries by absolute path instead of installing SACAI's own
+  Python dependencies into that conda env.
+- **The existing `scientific_workflow` LangGraph orchestrator has a
+  pre-existing cross-container gap, not introduced by this pipeline but
+  directly adjacent to it.** `orchestrator.py`'s `_isis_node` calls
+  `isis.preprocess()` as a plain in-process Python function, not a routed
+  Celery subtask — but `celery_app.py` routes the whole `sacai.workflow` task
+  (the LangGraph graph's execution) onto `planetir_queue` unconditionally.
+  `planetir-worker` runs the plain `sacai/scientific-service` image, which
+  has no ISIS binaries (`isis-worker` is a separate image built FROM
+  `isis-runtime` specifically because of this). So a `workflow` job whose
+  input actually needs ISIS preprocessing will have its `SACAI_ISIS_COMMAND`
+  wrapper attempt to exec ISIS commands that do not exist in that container,
+  and fail. The DEM pipeline avoids this class of bug entirely: `lunar_dem`/
+  `orthorectify` jobs are dispatched via the ordinary routed-Celery-task path
+  (`api.py` picks `asp_cpu`/`otb_cpu` explicitly, matching the container that
+  actually has the right binaries), never as an in-process call from a
+  differently-queued task. Fixing the `workflow` graph's gap is out of scope
+  here; it would mean either giving `planetir-worker` ISIS binaries too, or
+  redesigning `orchestrator.py` to dispatch each node as its own properly
+  routed Celery task/chain rather than a direct function call.
+- **`openwebui_tools/isis3_preprocess_tool.py` appears to be a superseded
+  draft, not the file actually in use.** `next_step` step 19 and
+  `service/tests/test_tool_surfaces.py` both reference
+  `openwebui_tools/isis3_preprocess.py` (async, direct OpenWebUI file
+  publication via `upload_file_handler`, SHA-256 artifact verification) as
+  the real ISIS3 Tool. `lunar_dem.py` was written to match that pattern, not
+  `isis3_preprocess_tool.py`'s earlier `requests`-based draft style. Whoever
+  maintains this repo should confirm `isis3_preprocess_tool.py` is dead and
+  remove it, or explain what it is actually for if it is not.

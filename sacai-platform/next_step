@@ -466,6 +466,8 @@ In **Workspace → Tools → Create Tool**, install:
 4. `openwebui_tools/isis3_preprocess.py` only when ISIS is enabled
 5. `openwebui_tools/admin_cleanup.py` only for an admin-restricted model
 6. `openwebui_tools/jupyter_runtime.py` only when the external Jupyter runtime is approved
+7. `openwebui_tools/lunar_dem.py` only when `asp-worker`/`otb-worker` are up and
+   at least `ASP_STEREO_COMMAND`/`ASP_POINT2DEM_COMMAND` are configured
 
 If `stac_catalog` already exists, edit that same Tool record and replace its
 complete source with the new `openwebui_tools/stac_catalog.py`; do not create a

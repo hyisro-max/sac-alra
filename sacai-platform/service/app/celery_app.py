@@ -21,6 +21,9 @@ def create_celery_app() -> Celery:
             Queue(settings.isis_queue),
             Queue(settings.maintenance_queue),
             Queue(settings.notebook_queue),
+            Queue(settings.dem_queue),
+            Queue(settings.otb_queue),
+            Queue(settings.ch2_queue),
         ),
         task_routes={
             "sacai.planetir": {"queue": settings.planetir_queue},
@@ -28,6 +31,8 @@ def create_celery_app() -> Celery:
             "sacai.cleanup": {"queue": settings.maintenance_queue},
             "sacai.workflow": {"queue": settings.planetir_queue},
             "sacai.notebook": {"queue": settings.notebook_queue},
+            "sacai.lunar_dem": {"queue": settings.dem_queue},
+            "sacai.orthorectify": {"queue": settings.otb_queue},
         },
         task_track_started=True,
         task_acks_late=True,
@@ -47,6 +52,14 @@ def create_celery_app() -> Celery:
             "sacai.notebook": {
                 "soft_time_limit": settings.notebook_soft_time_limit_seconds,
                 "time_limit": settings.notebook_time_limit_seconds,
+            },
+            "sacai.lunar_dem": {
+                "soft_time_limit": settings.dem_soft_time_limit_seconds,
+                "time_limit": settings.dem_time_limit_seconds,
+            },
+            "sacai.orthorectify": {
+                "soft_time_limit": settings.otb_soft_time_limit_seconds,
+                "time_limit": settings.otb_time_limit_seconds,
             },
         },
         result_expires=7 * 24 * 3600,

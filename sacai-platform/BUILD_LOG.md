@@ -402,4 +402,93 @@ and a real vLLM `/v1/models` reachability check from inside the OpenWebUI
 container remain required on the actual connected AlmaLinux builder and
 offline RHEL hosts; none of those were claimed as passing here.
 
+## 2026-09-10 — Lunar DEM pipeline: ISIS -> ASP -> OTB, wired mission-agnostic
+
+Purpose: the platform's stated main goal is autonomous lunar DEM generation.
+`docker/asp-runtime.Dockerfile` and `docker/ch2-runtime.Dockerfile` already
+existed in the repo (built and loaded on the operator's host, per
+`docker images` output: `sacai/asp-runtime:3.5.0-amd64`,
+`sacai/ch2-runtime:10.0.0rc2-amd64`) but were not referenced anywhere else --
+no Compose service, no queue, no Tool, no ARCHITECTURE_DECISIONS entry. "OTV"
+in the requested "ISIS ASP OTV" pipeline was clarified to mean Orfeo ToolBox
+(OTB, CNES). The operator explicitly wants DEM generation "not specific to a
+mission or sensor" -- the design below keeps the generic ISIS 8.3.0 path
+(`isis-worker`) as the default for every mission, with the ISIS 10 RC2
+Chandrayaan-2 TMC-2 variant (`ch2-worker`) opt-in per job via
+`options.mission == "ch2_tmc2"`, never a default.
+
+New generic, mission-agnostic stage wrappers, matching `isis/isis_preprocess.py`'s
+existing contract exactly (operator-configured command templates, no
+hardcoded tool flags or session type): `dem/asp_stereo.py` (optional bundle
+adjustment -> stereo correlation -> `point2dem`, `{left}`/`{right}`/`{prefix}`/
+`{output}` placeholders) and `dem/otb_postprocess.py` (one OTB stage,
+`{input}`/`{dem}`/`{output}` placeholders).
+
+Service layer, mirroring `isis.py`'s existing single-input pattern extended to
+two inputs: `service/app/dem.py:generate_dem()` and
+`service/app/otb.py:orthorectify()`. `schemas.py`'s `JobSubmit`/`JobStatus`
+gained `lunar_dem`/`orthorectify` kinds and a validated
+`secondary_input_file_id`/`secondary_input_path`/`secondary_original_name`
+triple (the right stereo image, or the DEM to orthorectify against) -- a real
+field rather than living inside the free-form `options` mapping, so `api.py`
+applies the same `resolve_below()` boundary check to it that `input_path`
+already gets. New `asp_cpu`/`otb_cpu`/`ch2_cpu` Celery queues in
+`config.py`/`celery_app.py`; new `tasks.py:_run_paired_job()` (mirrors
+`_run_job()`, requires `secondary_input_path`) backing `sacai.lunar_dem`/
+`sacai.orthorectify`; `api.py`'s `submit_job()` validates and resolves the
+secondary path the same way as the primary one before dispatch, and routes
+`isis3` jobs to `ch2_cpu` only when `options.mission == "ch2_tmc2"`.
+
+New Tool `openwebui_tools/lunar_dem.py` (`lunar_dem_pipeline`, actions
+`submit_dem`/`submit_orthorectify`/`status`/`cancel`). Written to match
+`openwebui_tools/isis3_preprocess.py` -- the async, `urllib`-based,
+direct-`upload_file_handler`-publication pattern that
+`service/tests/test_tool_surfaces.py` and `next_step` step 19 both actually
+reference -- not `isis3_preprocess_tool.py`'s earlier `requests`-based draft,
+which this session found is not referenced by anything and is flagged in
+ARCHITECTURE_DECISIONS.md §13 as likely dead.
+
+Docker: `docker/asp-worker.Dockerfile` and `docker/ch2-worker.Dockerfile`
+layer the SACAI service/Celery code onto the already-built `asp-runtime`/
+`ch2-runtime` images, exactly mirroring `isis-worker.Dockerfile`'s existing
+pattern. `docker/otb-runtime.Dockerfile` (new, not yet built by the operator)
+and `docker/otb-worker.Dockerfile` follow the same conda-based pattern as
+`asp-runtime.Dockerfile`; unlike ASP/CH2, OTB's conda environment's Python
+version has no existing proof of wheelhouse compatibility, flagged explicitly
+in both the Dockerfile and ARCHITECTURE_DECISIONS.md §13.
+`docker-compose.yml`: `asp-worker`/`otb-worker` default-enabled (core to the
+stated goal, like `planetir-worker`); `ch2-worker` opt-in via
+`profiles: ["ch2"]` (like `isis-worker`'s existing `profiles: ["isis"]`).
+New `.env` variables for ASP/OTB/CH2 concurrency, resource limits, command
+templates, and `ISISDATA_CH2_HOST_PATH`, added to `.env.example` and both
+`.env.server-*.example` files identically (these are queue/resource defaults,
+not host-specific).
+
+Checks run, this time in an isolated venv against the real
+`service/requirements.txt` and `service/test-requirements.txt` (a step up
+from prior entries' "no pytest in the base environment" limitation -- a clean
+`python3 -m venv` avoided the system Python's unrelated dependency
+conflicts):
+
+```text
+python3 -m venv /tmp/sacai_venv && /tmp/sacai_venv/bin/pip install -r service/requirements.txt -r service/test-requirements.txt
+python3 -m compileall -q service openwebui_tools dem isis branding
+PYTHONPATH=service /tmp/sacai_venv/bin/python -m pytest -q service/tests
+docker compose --env-file .env.example -f docker-compose.yml config --quiet
+docker compose --env-file .env.example -f docker-compose.yml config --services
+COMPOSE_PROFILES=isis,ch2 docker compose --env-file .env.example -f docker-compose.yml config --quiet
+# repeated for .env.server-253.example and .env.server-254.example
+```
+
+All 25 tests passed (20 pre-existing plus 5 new `test_dem_pipeline.py` cases
+covering the new schema fields, the paired-task secondary-input guard, and
+queue isolation). All three `.env` files produced valid Compose configs, both
+by default (`asp-worker`/`otb-worker` present, `ch2-worker`/`isis-worker`
+absent) and with `COMPOSE_PROFILES=isis,ch2` (all six worker services
+present, `ch2-worker` mounting a separate `ISISDATA_CH2_HOST_PATH`). Real
+end-to-end DEM generation against actual ASP/OTB binaries, the `otb-runtime`
+build itself, and tuning the empty `ASP_*`/`OTB_*`/`CH2_ISIS_*_COMMAND`
+templates for a specific sensor remain deployment work on the connected
+builder and production hosts; none of that was claimed as passing here.
+
 

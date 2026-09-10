@@ -7,9 +7,11 @@ from celery.exceptions import SoftTimeLimitExceeded
 from .audit import append_event
 from .celery_app import celery_app
 from .cleanup import run_cleanup
+from .dem import generate_dem
 from .isis import preprocess
 from .orchestrator import invoke_scientific
 from .notebook_runtime import run_remote_notebook
+from .otb import orthorectify
 from .planetir import analyze
 from .schemas import CleanupRequest, JobSubmit, RemoteNotebookResult, RemoteNotebookSubmit
 
@@ -54,6 +56,45 @@ def isis_task(payload: dict[str, Any]) -> dict[str, Any]:
     """Execute one raw-product ISIS3 payload on the isolated ISIS queue."""
 
     return _run_job(payload, preprocess)
+
+
+def _run_paired_job(payload: dict[str, Any], processor) -> dict[str, Any]:
+    """Run one validated two-input job (lunar_dem, orthorectify) with audit events.
+
+    Same contract as _run_job, extended for a processor that takes a second
+    trusted path (the stereo-pair right image, or the DEM to orthorectify).
+    """
+
+    job = JobSubmit.model_validate(payload)
+    job_id = payload["job_id"]
+    if not job.secondary_input_path:
+        raise ValueError(f"secondary_input_path is required for kind={job.kind!r}")
+    append_event(job.correlation_id, "job.started", job.user_id, {"job_id": job_id, "kind": job.kind})
+    try:
+        result = processor(job_id, job.user_id, job.input_path, job.secondary_input_path, job.options)
+        append_event(job.correlation_id, "tool.raw_result", job.user_id, result)
+        return result
+    except SoftTimeLimitExceeded as error:
+        message = "job exceeded the configured soft time limit"
+        append_event(job.correlation_id, "job.failed", job.user_id, {"job_id": job_id, "error": message})
+        raise RuntimeError(message) from error
+    except Exception as error:
+        append_event(job.correlation_id, "job.failed", job.user_id, {"job_id": job_id, "error": str(error)})
+        raise
+
+
+@celery_app.task(name="sacai.lunar_dem")
+def lunar_dem_task(payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute one ISIS-stereo-pair-to-DEM payload on the isolated ASP queue."""
+
+    return _run_paired_job(payload, generate_dem)
+
+
+@celery_app.task(name="sacai.orthorectify")
+def orthorectify_task(payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute one image+DEM orthorectification payload on the isolated OTB queue."""
+
+    return _run_paired_job(payload, orthorectify)
 
 
 @celery_app.task(name="sacai.cleanup")

@@ -25,7 +25,7 @@ from .schemas import (
     RemoteNotebookSubmit,
 )
 from .security import require_internal_token, resolve_below
-from .tasks import isis_task, notebook_task, planetir_task, workflow_task
+from .tasks import isis_task, lunar_dem_task, notebook_task, orthorectify_task, planetir_task, workflow_task
 
 
 def _redis() -> Redis:
@@ -103,19 +103,46 @@ def submit_job(request: JobSubmit) -> JobAccepted:
         raise HTTPException(status_code=400, detail="input file does not exist")
     if source.stat().st_size > get_settings().max_input_bytes:
         raise HTTPException(status_code=413, detail="input exceeds configured SACAI_MAX_INPUT_BYTES")
+    secondary_source: str | None = None
+    if request.kind in {"lunar_dem", "orthorectify"}:
+        if not request.secondary_input_path:
+            detail = "right" if request.kind == "lunar_dem" else "dem"
+            raise HTTPException(status_code=400, detail=f"secondary_input_path ({detail} image) is required")
+        resolved_secondary = resolve_below(request.secondary_input_path, get_settings().upload_root)
+        if not resolved_secondary.is_file():
+            raise HTTPException(status_code=400, detail="secondary input file does not exist")
+        if resolved_secondary.stat().st_size > get_settings().max_input_bytes:
+            raise HTTPException(status_code=413, detail="secondary input exceeds configured SACAI_MAX_INPUT_BYTES")
+        secondary_source = str(resolved_secondary)
     _check_quota(request.user_id)
     job_id = str(uuid4())
     if request.kind == "planetir":
         queue = get_settings().planetir_queue
         task = planetir_task
     elif request.kind == "isis3":
-        queue = get_settings().isis_queue
+        # Mission-specific ISIS ingest (e.g. Chandrayaan-2 TMC-2, which needs
+        # ISIS 10 RC2 and a separate ISISDATA tree the generic isis-worker
+        # does not have) is opt-in via options.mission, never a default --
+        # the generic isis_cpu queue/worker stays the default path for
+        # "not specific to a mission or sensor" DEM generation.
+        queue = get_settings().ch2_queue if request.options.get("mission") == "ch2_tmc2" else get_settings().isis_queue
         task = isis_task
+    elif request.kind == "lunar_dem":
+        queue = get_settings().dem_queue
+        task = lunar_dem_task
+    elif request.kind == "orthorectify":
+        queue = get_settings().otb_queue
+        task = orthorectify_task
     else:
         ready = bool(request.options.get("already_calibrated")) or source.suffix.lower() in {".tif", ".tiff"}
         queue = get_settings().planetir_queue if ready else get_settings().isis_queue
         task = workflow_task
-    payload = {**request.model_dump(mode="json"), "input_path": str(source), "job_id": job_id}
+    payload = {
+        **request.model_dump(mode="json"),
+        "input_path": str(source),
+        "secondary_input_path": secondary_source,
+        "job_id": job_id,
+    }
     metadata = {
         "job_id": job_id,
         "correlation_id": request.correlation_id,
