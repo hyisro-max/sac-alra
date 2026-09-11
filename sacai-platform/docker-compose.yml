@@ -65,6 +65,65 @@ services:
       retries: 20
       start_period: 120s
 
+  openwebui-canary:
+    # A second OpenWebUI frontend for testing this release (new image tag,
+    # DEM Tool, vLLM wiring) without touching the running `openwebui`
+    # service or its data. Same image and same sacai-api/chroma/redis
+    # backend ("part of the project"), but its own port and its own data
+    # volume: two OpenWebUI instances must never share one openwebui-data
+    # volume, since each is a separate writer against the same sqlite/user
+    # database. Opt-in only -- `docker compose up -d` alone never starts or
+    # touches this service, and it never restarts `openwebui`.
+    profiles: ["canary"]
+    image: sacai/openwebui:v0.11.3-sacalra1-amd64
+    restart: unless-stopped
+    ports:
+      - "${SACAI_CANARY_WEB_PORT:-3006}:8080"
+    environment:
+      WEBUI_NAME: "${PROJECT_NAME:-SAC-ALRA} (canary)"
+      WEBUI_SECRET_KEY: "${WEBUI_SECRET_KEY:?set WEBUI_SECRET_KEY in .env}"
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      NO_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      no_proxy: ""
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:?set the existing Ollama API URL in .env}"
+      OLLAMA_BASE_URLS: "${OLLAMA_BASE_URLS:-}"
+      ENABLE_OPENAI_API: "${ENABLE_OPENAI_API:-false}"
+      OPENAI_API_BASE_URLS: "${OPENAI_API_BASE_URLS:-}"
+      OPENAI_API_KEYS: "${OPENAI_API_KEYS:-}"
+      OFFLINE_MODE: "true"
+      VECTOR_DB: chroma
+      CHROMA_HTTP_HOST: chroma
+      CHROMA_HTTP_PORT: "8000"
+      CHROMA_TENANT: default_tenant
+      CHROMA_DATABASE: default_database
+      AUDIT_LOG_LEVEL: REQUEST_RESPONSE
+      AUDIT_INCLUDED_PATHS: "tools,functions,models,files,chat"
+      ENABLE_AUDIT_LOGS_FILE: "true"
+      ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS: "false"
+      NLTK_DATA: /app/backend/data/cache/nltk_data
+      LANGGRAPH_STRICT_MSGPACK: "true"
+    volumes:
+      - openwebui-canary-data:/app/backend/data
+      - ./offline/models/openwebui-cache:/app/backend/data/cache
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs:ro"
+      - ./openwebui_tools:/opt/sacai/tools:ro
+      - ./openwebui_functions:/opt/sacai/functions:ro
+      - ./prompts:/opt/sacai/prompts:ro
+    depends_on:
+      sacai-api:
+        condition: service_healthy
+      chroma:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl --silent --fail http://localhost:8080/health | jq -e '.status == true' >/dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
   sacai-api:
     build:
       context: ..
@@ -304,6 +363,7 @@ services:
 
 volumes:
   openwebui-data:
+  openwebui-canary-data:
   redis-data:
   chroma-data:
 # sacai-outputs, sacai-audit, and sacai-tool-versions are bind-mounted host
