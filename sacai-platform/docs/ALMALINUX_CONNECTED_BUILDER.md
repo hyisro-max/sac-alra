@@ -26,7 +26,7 @@ Copy these two files to the AlmaLinux host:
 - `sacai-alma-builder-source.tar.gz`
 - `sacai-alma-builder-source.tar.gz.sha256`
 
-The archive contains OpenWebUI v0.10.2 source, PySTAC Client source, and the
+The archive contains OpenWebUI v0.11.3 source, PySTAC Client source, and the
 complete `sacai-platform` implementation. It excludes `.git`, `.github`, GitHub
 workflow/templates, `.gitignore`, `.gitattributes`, caches, generated wheels,
 models, and image archives. License files and ordinary documentation remain.

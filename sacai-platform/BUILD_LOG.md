@@ -306,4 +306,365 @@ A real runtime URL/token was not supplied, so
 the live REST, WebSocket, kernelspec, notebook, and cancellation acceptance
 tests remain deployment gates rather than claimed results.
 
+## 2026-09-10 — OpenWebUI v0.11.3 upgrade, vLLM connection, bind-mounted outputs
+
+Purpose: production is running OpenWebUI v0.11.3 while this platform's audited
+baseline was v0.10.2; add a vLLM (OpenAI-compatible) connection alongside the
+existing external Ollama connection; move scientific outputs, the audit
+trail, and installed tool versions from Docker named volumes to bind-mounted
+host directories so an operator can inspect/back them up without Docker
+tooling.
+
+Source upgrade: `source-code/open-webui` replaced in full with the upstream
+`v0.11.3` tag (commit `2a960a59fe1dbbd35282f0556b3666d81102e781`), shallow-cloned
+from `https://github.com/open-webui/open-webui.git` and copied over the
+checked-in `v0.10.2` tree (`ecd48e2f718220a6400ecf49eafd4867a38feb10`). Every
+claim in `ARCHITECTURE_DECISIONS.md` §1 and §8 was re-verified against the new
+source by direct `diff -u` (not re-derived from memory or assumed unchanged);
+findings are recorded in a new §12 and as inline `[v0.11.3: ...]` notes.
+Summary of what actually changed: the five separate request middlewares were
+replaced by one consolidated `AppHTTPMiddleware`; Filters gained an optional
+`request` hook additive to `inlet`/`stream`/`outlet`; file uploads gained two
+optional behaviors on an unchanged publication path; `backend/requirements.txt`
+drops `python-jose` for `joserfc` and renames `rapidocr-onnxruntime` to
+`rapidocr`; the branding overlay's patch targets (`env.py` WEBUI_NAME/favicon,
+`compareVersion()`, `main.py` logo reference, `site.webmanifest`) are all
+byte-for-byte unchanged, so `branding/apply_branding.py` and
+`branding/verify_branding_overlay.py` needed no code changes; and OpenWebUI
+introduced an unrelated new "Open Terminal" feature
+(`TERMINAL_SERVER_CONNECTIONS`, default empty) providing real server-side
+command execution, which is explicitly left unconfigured and undocumented as
+an integration point, for the same reason Stage 13 does not implement a shell
+Tool — it is not the browser-side Pyodide Code Interpreter this platform
+already relies on, which is unchanged. `grep` across `service/`,
+`openwebui_tools/`, `openwebui_functions/`, `branding/`, and `docker/` found no
+references to the removed/renamed Python packages or to the old middleware
+class names. Ten new Alembic migrations exist between the two versions; a new
+`scripts/backup_openwebui_data.sh` backs up the `openwebui-data` volume before
+a rebuild runs them, and `next_step`/`OFFLINE_DEPLOYMENT.md` now call for that
+backup on any host with real existing data. All `v0.10.2`/`sacalra3` version
+and image-tag strings across `docker-compose.yml`, `docker/openwebui.Dockerfile`,
+`scripts/*.sh`, `branding/apply_branding.py`, and `docs/*.md` were updated to
+`v0.11.3`/`sacalra1` (a fresh overlay-revision counter on the new base); one
+pre-existing drift in `docs/OFFLINE_DEPLOYMENT.md` (`sacalra2` for the
+dependency-image tags, where every build script already used `sacalra3`) was
+also corrected to `sacalra1` while there.
+
+vLLM connection: OpenWebUI's existing `ENABLE_OPENAI_API` /
+`OPENAI_API_BASE_URLS` / `OPENAI_API_KEYS` env vars (unchanged in v0.11.3,
+confirmed in `config.py`) are wired into the `openwebui` Compose service
+alongside the existing `OLLAMA_BASE_URL`/`OLLAMA_BASE_URLS`, following the
+same "external service, not a Compose service" pattern Ollama already uses.
+`ENABLE_OPENAI_API` defaults to `false` so a host with no OpenAI-compatible
+server does not silently fall back to the public OpenAI API. `.env.example`
+and `.env.server-253.example` document it commented-out;
+`.env.server-254.example` sets it concretely to the vLLM instance at
+`10.61.247.254:8004/v1` with the `EMPTY` placeholder key vLLM itself expects
+when started without `--api-key`.
+
+Bind-mounted outputs: `sacai-outputs`, `sacai-audit`, and
+`sacai-tool-versions` named volumes are replaced with bind mounts to
+`SACAI_OUTPUT_HOST_PATH` / `SACAI_AUDIT_HOST_PATH` /
+`SACAI_TOOL_VERSIONS_HOST_PATH` (default `./offline/data/{outputs,audit,
+tool_versions}`, already covered by the existing `sacai-platform/offline/`
+`.gitignore` entry) across every service that mounts them (`openwebui`,
+`sacai-api`, `planetir-worker`, `isis-worker`, `notebook-worker`). Container-side
+paths (`/data/outputs`, `/data/audit`, `/data/tool_versions`) are unchanged, so
+no service code needed changes. New `scripts/prepare_output_host_paths.sh`
+creates and validates the host directories (called from `rebuild_offline.sh`
+and documented in the deployment guides); new
+`scripts/migrate_named_volumes_to_bind_mounts.sh` copies forward any data left
+in the old named volumes from a prior release, using the already-loaded
+`sacai-api` image rather than pulling an `alpine` image an offline host would
+not have.
+
+Checks run on this Mac-equivalent environment:
+
+```text
+python3 -m compileall -q sacai-platform/service sacai-platform/openwebui_tools \
+  sacai-platform/openwebui_functions sacai-platform/branding sacai-platform/isis
+python3 -m compileall -q source-code/open-webui/backend/open_webui
+bash -n sacai-platform/scripts/*.sh
+grep -rn "import jose\|rapidocr\|rosepine\|RedirectMiddleware\|SecurityHeadersMiddleware\|CommitSessionMiddleware\|AuthTokenMiddleware\|WebsocketUpgradeGuardMiddleware\|XTerminal\|AddTerminalServerModal" \
+  sacai-platform/service sacai-platform/openwebui_tools sacai-platform/openwebui_functions \
+  sacai-platform/branding sacai-platform/docker
+docker compose --env-file sacai-platform/.env.example -f sacai-platform/docker-compose.yml config --quiet
+docker compose --env-file sacai-platform/.env.server-253.example -f sacai-platform/docker-compose.yml config --quiet
+docker compose --env-file sacai-platform/.env.server-254.example -f sacai-platform/docker-compose.yml config --quiet
+```
+
+All commands passed; the grep for removed/renamed dependencies and rejected
+frontend components returned no matches in this overlay's own code, and all
+three Compose configurations resolved the new OpenAI/vLLM variables and
+bind-mounted output paths correctly. `run_on_alma_builder.sh`'s live wheel
+resolution against the new `requirements.txt`, the disconnected rebuild gate,
+and a real vLLM `/v1/models` reachability check from inside the OpenWebUI
+container remain required on the actual connected AlmaLinux builder and
+offline RHEL hosts; none of those were claimed as passing here.
+
+## 2026-09-10 — Lunar DEM pipeline: ISIS -> ASP -> OTB, wired mission-agnostic
+
+Purpose: the platform's stated main goal is autonomous lunar DEM generation.
+`docker/asp-runtime.Dockerfile` and `docker/ch2-runtime.Dockerfile` already
+existed in the repo (built and loaded on the operator's host, per
+`docker images` output: `sacai/asp-runtime:3.5.0-amd64`,
+`sacai/ch2-runtime:10.0.0rc2-amd64`) but were not referenced anywhere else --
+no Compose service, no queue, no Tool, no ARCHITECTURE_DECISIONS entry. "OTV"
+in the requested "ISIS ASP OTV" pipeline was clarified to mean Orfeo ToolBox
+(OTB, CNES). The operator explicitly wants DEM generation "not specific to a
+mission or sensor" -- the design below keeps the generic ISIS 8.3.0 path
+(`isis-worker`) as the default for every mission, with the ISIS 10 RC2
+Chandrayaan-2 TMC-2 variant (`ch2-worker`) opt-in per job via
+`options.mission == "ch2_tmc2"`, never a default.
+
+New generic, mission-agnostic stage wrappers, matching `isis/isis_preprocess.py`'s
+existing contract exactly (operator-configured command templates, no
+hardcoded tool flags or session type): `dem/asp_stereo.py` (optional bundle
+adjustment -> stereo correlation -> `point2dem`, `{left}`/`{right}`/`{prefix}`/
+`{output}` placeholders) and `dem/otb_postprocess.py` (one OTB stage,
+`{input}`/`{dem}`/`{output}` placeholders).
+
+Service layer, mirroring `isis.py`'s existing single-input pattern extended to
+two inputs: `service/app/dem.py:generate_dem()` and
+`service/app/otb.py:orthorectify()`. `schemas.py`'s `JobSubmit`/`JobStatus`
+gained `lunar_dem`/`orthorectify` kinds and a validated
+`secondary_input_file_id`/`secondary_input_path`/`secondary_original_name`
+triple (the right stereo image, or the DEM to orthorectify against) -- a real
+field rather than living inside the free-form `options` mapping, so `api.py`
+applies the same `resolve_below()` boundary check to it that `input_path`
+already gets. New `asp_cpu`/`otb_cpu`/`ch2_cpu` Celery queues in
+`config.py`/`celery_app.py`; new `tasks.py:_run_paired_job()` (mirrors
+`_run_job()`, requires `secondary_input_path`) backing `sacai.lunar_dem`/
+`sacai.orthorectify`; `api.py`'s `submit_job()` validates and resolves the
+secondary path the same way as the primary one before dispatch, and routes
+`isis3` jobs to `ch2_cpu` only when `options.mission == "ch2_tmc2"`.
+
+New Tool `openwebui_tools/lunar_dem.py` (`lunar_dem_pipeline`, actions
+`submit_dem`/`submit_orthorectify`/`status`/`cancel`). Written to match
+`openwebui_tools/isis3_preprocess.py` -- the async, `urllib`-based,
+direct-`upload_file_handler`-publication pattern that
+`service/tests/test_tool_surfaces.py` and `next_step` step 19 both actually
+reference -- not `isis3_preprocess_tool.py`'s earlier `requests`-based draft,
+which this session found is not referenced by anything and is flagged in
+ARCHITECTURE_DECISIONS.md §13 as likely dead.
+
+Docker: `docker/asp-worker.Dockerfile` and `docker/ch2-worker.Dockerfile`
+layer the SACAI service/Celery code onto the already-built `asp-runtime`/
+`ch2-runtime` images, exactly mirroring `isis-worker.Dockerfile`'s existing
+pattern. `docker/otb-runtime.Dockerfile` (new, not yet built by the operator)
+and `docker/otb-worker.Dockerfile` follow the same conda-based pattern as
+`asp-runtime.Dockerfile`; unlike ASP/CH2, OTB's conda environment's Python
+version has no existing proof of wheelhouse compatibility, flagged explicitly
+in both the Dockerfile and ARCHITECTURE_DECISIONS.md §13.
+`docker-compose.yml`: `asp-worker`/`otb-worker` default-enabled (core to the
+stated goal, like `planetir-worker`); `ch2-worker` opt-in via
+`profiles: ["ch2"]` (like `isis-worker`'s existing `profiles: ["isis"]`).
+New `.env` variables for ASP/OTB/CH2 concurrency, resource limits, command
+templates, and `ISISDATA_CH2_HOST_PATH`, added to `.env.example` and both
+`.env.server-*.example` files identically (these are queue/resource defaults,
+not host-specific).
+
+Checks run, this time in an isolated venv against the real
+`service/requirements.txt` and `service/test-requirements.txt` (a step up
+from prior entries' "no pytest in the base environment" limitation -- a clean
+`python3 -m venv` avoided the system Python's unrelated dependency
+conflicts):
+
+```text
+python3 -m venv /tmp/sacai_venv && /tmp/sacai_venv/bin/pip install -r service/requirements.txt -r service/test-requirements.txt
+python3 -m compileall -q service openwebui_tools dem isis branding
+PYTHONPATH=service /tmp/sacai_venv/bin/python -m pytest -q service/tests
+docker compose --env-file .env.example -f docker-compose.yml config --quiet
+docker compose --env-file .env.example -f docker-compose.yml config --services
+COMPOSE_PROFILES=isis,ch2 docker compose --env-file .env.example -f docker-compose.yml config --quiet
+# repeated for .env.server-253.example and .env.server-254.example
+```
+
+All 25 tests passed (20 pre-existing plus 5 new `test_dem_pipeline.py` cases
+covering the new schema fields, the paired-task secondary-input guard, and
+queue isolation). All three `.env` files produced valid Compose configs, both
+by default (`asp-worker`/`otb-worker` present, `ch2-worker`/`isis-worker`
+absent) and with `COMPOSE_PROFILES=isis,ch2` (all six worker services
+present, `ch2-worker` mounting a separate `ISISDATA_CH2_HOST_PATH`). Real
+end-to-end DEM generation against actual ASP/OTB binaries, the `otb-runtime`
+build itself, and tuning the empty `ASP_*`/`OTB_*`/`CH2_ISIS_*_COMMAND`
+templates for a specific sensor remain deployment work on the connected
+builder and production hosts; none of that was claimed as passing here.
+
+## 2026-09-11 — openwebui-canary service; connected-builder image drift fixes
+
+Purpose: the operator reported production 254 image state, which surfaced
+real gaps between what this repo's scripts produce and what is actually
+running.
+
+Added `openwebui-canary`, a second OpenWebUI frontend (own port via
+`SACAI_CANARY_WEB_PORT`, own `openwebui-canary-data` volume -- two instances
+must never share one OpenWebUI database) sharing the existing
+`sacai-api`/`redis`/`chroma` backend, gated behind `profiles: ["canary"]` so
+neither a bare `docker compose up` nor a targeted `up -d --no-deps
+openwebui-canary` ever touches the operator's existing production `openwebui`
+container.
+
+Fixed two real, pre-existing bugs found by comparing `docker image ls` on 254
+against what this repo expects:
+
+- `scripts/prepare_connected_bundle.sh` built and tagged
+  `sacai/scientific-service`/`sacai/tests` as `1.0.0`, while
+  `docker-compose.yml` and both deployment docs have always expected `1.1.0`.
+  This explains the `1.0.0` image sitting unused on 254 (harmless in
+  practice, since `sacai-api`/`planetir-worker`/`notebook-worker` all carry
+  their own `build:` block and rebuild fresh under the correct tag
+  regardless) but is still a real drift, now fixed to `1.1.0` throughout.
+- `scripts/prepare_connected_bundle.sh` never learned about ASP or CH2 at
+  all -- the operator had built `asp-runtime`/`ch2-runtime` and their worker
+  images by hand, outside any tracked script. Added `SACAI_BUILD_ASP`
+  (defaults to `1`: asp-worker is a default-enabled Compose service, unlike
+  the truly-optional ISIS/CH2 containers, so it now builds by default rather
+  than requiring an explicit opt-in) and `SACAI_BUILD_CH2` (defaults to `0`,
+  mission-specific, mirrors `SACAI_BUILD_ISIS`) gated sections, each
+  mirroring the existing ISIS section's build-then-conditionally-build-
+  worker-then-save-to-its-own-tar pattern exactly. `load_offline_images.sh`
+  now loads `asp-runtime-amd64.tar` unconditionally (asp-worker has no
+  `build:` fallback path once its base image is missing, so a missing tar
+  should fail loudly at load time, not with a confusing error later) and
+  conditionally loads `ch2-runtime-amd64.tar`/`otb-runtime-amd64.tar`.
+
+`otb-worker` was changed from default-enabled to `profiles: ["otb"]`: the
+operator's existing `otb:otb` image's build method and therefore its
+Python-ABI compatibility with the offline wheelhouse are still unconfirmed
+(unlike `asp-runtime`/`ch2-runtime`, which both install ISIS 8.3.0 alongside
+them and inherit `isis-runtime`'s already-proven compatibility). Left
+un-added to `prepare_connected_bundle.sh` for the same reason -- adding a
+`SACAI_BUILD_OTB` gate before confirming the real base image/build method
+would template a build that might not match what actually runs.
+
+Checks run:
+
+```text
+bash -n scripts/prepare_connected_bundle.sh scripts/load_offline_images.sh
+python3 -c "import yaml; yaml.safe_load(open('docker-compose.yml'))"
+docker compose --env-file .env.example -f docker-compose.yml config --services
+COMPOSE_PROFILES=otb docker compose --env-file .env.example -f docker-compose.yml config --services
+COMPOSE_PROFILES=canary docker compose --env-file .env.server-254.example -f docker-compose.yml config --quiet
+COMPOSE_PROFILES=isis,ch2,canary docker compose --env-file .env.example -f docker-compose.yml config --quiet
+# repeated for .env.server-253.example and .env.server-254.example
+```
+
+All passed. `otb-worker`'s absence from the default service list and
+presence under `COMPOSE_PROFILES=otb` were confirmed directly, as was
+`openwebui-canary` publishing port 3006 while the primary `openwebui`
+service keeps its own configured port. Still unconfirmed here (needs the
+operator's answer, then a real connected-builder run):
+`otb:otb`'s actual build method; whether/how `sacai-super-res:latest` and
+`ghcr.io/openwebui/pipelines:main` (both present on 254, neither referenced
+anywhere in this repo) should be wired in.
+
+## 2026-09-11 — otb:otb base image, Pipelines connection
+
+Purpose: the operator confirmed `otb:otb` was loaded from a pre-existing
+`.tar.gz` of unknown origin (not built by `docker/otb-runtime.Dockerfile`,
+and no one currently knows its OS/Python), and asked for
+`sacai-super-res:latest` and `ghcr.io/openwebui/pipelines:main` to be
+incorporated as platform features.
+
+`docker/otb-worker.Dockerfile`'s `OTB_BASE_IMAGE` default changed from the
+never-built `sacai/otb-runtime:9.1.0-amd64` to the operator's real `otb:otb`.
+Added two `RUN` diagnostic steps before the wheelhouse install --
+`command -v python3 pip3` and a Python-3.11 version check -- so a
+build against an incompatible base fails immediately with a named cause
+and a `docker run --rm otb:otb ...` command to inspect what is actually in
+the image, instead of a bare `pip install --no-index` ABI error. `otb-worker`
+stays `profiles: ["otb"]` (opt-in) until an actual build is attempted and
+confirmed.
+
+Pipelines needed no new code: `routers/pipelines.py:get_openai_connection()`
+reads a Pipelines server's URL/key from the same
+`Config.get('openai.api_base_urls'/'openai.api_keys')` store that any
+OpenAI-compatible connection uses -- OpenWebUI tells a Pipelines server
+apart from vLLM purely by the `pipeline` field its own `/models` response
+carries, not a separate config namespace. `.env.server-254.example` now
+lists vLLM and Pipelines together in one semicolon-joined
+`OPENAI_API_BASE_URLS`/`OPENAI_API_KEYS` pair, using the Pipelines project's
+own published port/key defaults (`9099`, `0p3n-w3bu!`) as placeholders --
+not yet confirmed against the operator's actual running container.
+
+`sacai-super-res:latest` was not wired in: its CLI/API surface, input/output
+shape, and where it belongs in the ISIS → ASP → OTB pipeline are still
+unknown, including to the operator's own description so far, and guessing
+at an unknown black-box image's interface risks writing a Tool/worker that
+silently does the wrong thing. Recorded as an open question rather than
+implemented speculatively, same reasoning as `otb:otb`'s build method.
+
+Checks run:
+
+```text
+python3 -c "import yaml; yaml.safe_load(open('docker-compose.yml'))"
+docker compose --env-file .env.example -f docker-compose.yml config --quiet
+COMPOSE_PROFILES=otb docker compose --env-file .env.example -f docker-compose.yml config --quiet
+# repeated for .env.server-253.example and .env.server-254.example
+docker compose --env-file .env.server-254.example -f docker-compose.yml config | grep OPENAI_API
+```
+
+All passed; the resolved `.env.server-254.example` config shows both vLLM
+and Pipelines URLs/keys correctly combined in order. The `otb-worker` build
+itself against the real `otb:otb` image, and any super-res integration,
+remain deployment work pending the operator's own image inspection and
+interface description.
+
+## 2026-09-11 — standalone super-resolution Tool (SR4RS)
+
+Purpose: the operator confirmed `sacai-super-res:latest` is a CLI tool
+(SR4RS, <https://github.com/remicres/sr4rs>) run via its own `docker-compose`
+Python scripts, and explicitly wants it standalone/on-demand -- not chained
+into ISIS → ASP → OTB DEM generation.
+
+Wired following `isis3_preprocess`'s single-input pattern exactly (not
+`lunar_dem_pipeline`'s two-input one, since this takes one image in, one
+enhanced image out): `superres/run_superres.py` (generic wrapper, same
+`{input}`/`{output}`-placeholder contract as the ISIS/ASP/OTB wrappers, no
+SR4RS savedmodel path or tile size hardcoded), `service/app/superres.py:
+enhance()` (mirrors `isis.py:preprocess()`), a new `superres` `JobSubmit`/
+`JobStatus` kind routed through the existing `_run_job` Celery helper (no
+new paired-job logic needed), a new `superres_cpu` queue, and
+`openwebui_tools/super_res.py` (mirrors `isis3_preprocess.py`'s async/
+`upload_file_handler`-publication pattern and its regression test entry in
+`test_tool_surfaces.py`).
+
+`docker/superres-worker.Dockerfile` builds FROM the operator's existing
+`sacai-super-res:latest`, with the same two diagnostic `RUN` checks
+(`python3`/`pip3` presence, Python 3.11 version) as `otb-worker.Dockerfile`
+added in the prior entry -- this image's Python-ABI compatibility with the
+offline wheelhouse is equally unconfirmed. `superres-worker` is
+`profiles: ["superres"]` for the same reason. Explicitly not reproduced:
+whatever volumes/environment `sacai-super-res`'s own `docker-compose` file
+used for model weights or GPU access -- flagged in both the Dockerfile and
+`ARCHITECTURE_DECISIONS.md` §13 as something to check before relying on this
+worker in production. No connected-builder (`prepare_connected_bundle.sh`)
+changes were needed: like `otb-worker`, `superres-worker` builds entirely
+from the offline wheelhouse (`--network=none`) against an externally-sourced
+base image, so `docker compose build` on the offline host handles it once
+its profile is enabled -- there is no conda/internet-dependent base-image
+build step to gate the way ISIS/ASP/CH2 have.
+
+Checks run:
+
+```text
+python3 -m compileall -q service openwebui_tools dem isis superres branding
+python3 -c "import yaml; yaml.safe_load(open('docker-compose.yml'))"
+docker compose --env-file .env.example -f docker-compose.yml config --quiet
+COMPOSE_PROFILES=superres docker compose --env-file .env.example -f docker-compose.yml config --quiet
+COMPOSE_PROFILES=isis,ch2,otb,canary,superres docker compose --env-file .env.example -f docker-compose.yml config --quiet
+# repeated for .env.server-253.example and .env.server-254.example
+PYTHONPATH=service /tmp/sacai_venv/bin/python -m pytest -q service/tests
+```
+
+All 25 tests passed (20 pre-existing, 5 from the earlier DEM pipeline entry;
+the Tool-surface test now also covers `super_res.py`). All three `.env`
+files produced valid Compose configs both by default and with every profile
+combination enabled together. A direct functional check confirmed
+`superres_cpu` queue registration, `JobSubmit(kind="superres")` validation,
+and `sacai.superres` Celery routing. The `superres-worker` build itself
+against the real `sacai-super-res:latest` image, and confirming its
+`docker-compose` file's volumes/env, remain deployment work.
+
 

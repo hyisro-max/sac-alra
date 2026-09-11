@@ -2,8 +2,10 @@
 set -euo pipefail
 
 SACAI_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OPENWEBUI_IMAGE="sacai/openwebui:v0.10.2-sacalra3-amd64"
+OPENWEBUI_IMAGE="sacai/openwebui:v0.11.3-sacalra1-amd64"
 COMPOSE=(docker compose --env-file "${SACAI_ROOT}/.env" -f "${SACAI_ROOT}/docker-compose.yml")
+
+"${SACAI_ROOT}/scripts/prepare_output_host_paths.sh"
 
 export DOCKER_BUILDKIT=1
 "${COMPOSE[@]}" build --pull=false --no-cache

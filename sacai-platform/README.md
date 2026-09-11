@@ -1,7 +1,7 @@
 # SAC-ALRA platform overlay
 
 This folder is the complete upgrade-safe SAC-ALRA delivery for the checked-in
-OpenWebUI v0.10.2 source. It does not modify `source-code/open-webui`.
+OpenWebUI v0.11.3 source. It does not modify `source-code/open-webui`.
 
 ## What is here
 

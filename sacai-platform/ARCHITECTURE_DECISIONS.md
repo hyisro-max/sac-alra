@@ -1,19 +1,21 @@
 # SAC-ALRA Architecture Decisions
 
 Status: accepted for implementation  
-Source baseline: OpenWebUI `v0.10.2`, commit `ecd48e2f718220a6400ecf49eafd4867a38feb10`
+Source baseline: OpenWebUI `v0.11.3`, commit `2a960a59fe1dbbd35282f0556b3666d81102e781`
+(upgraded from the originally audited `v0.10.2`, commit `ecd48e2f718220a6400ecf49eafd4867a38feb10`;
+see §12 for what the re-audit found and changed)
 
 ## 1. Source findings
 
-This file was written before implementation code. The decisions below come from reading the checked-in OpenWebUI backend and frontend, not from assumptions about another release.
+This file was written before implementation code. The decisions below come from reading the checked-in OpenWebUI backend and frontend, not from assumptions about another release. §12 records a later re-audit against `v0.11.3`; where that re-audit found a claim below no longer accurate, the claim is marked `[v0.11.3: ...]` rather than silently rewritten, so the original source-derived reasoning stays visible.
 
 ### Backend map
 
-- `backend/open_webui/main.py` creates the FastAPI application, installs authentication, security, session-commit and audit middleware, and mounts the API routers. Chat preparation and completion processing live mainly in `backend/open_webui/utils/middleware.py`.
+- `backend/open_webui/main.py` creates the FastAPI application, installs authentication, security, session-commit and audit middleware, and mounts the API routers. Chat preparation and completion processing live mainly in `backend/open_webui/utils/middleware.py`. `[v0.11.3: the five separate BaseHTTPMiddleware subclasses this described are now one consolidated AppHTTPMiddleware — see §12.]`
 - Local Tools are Python source stored in the `tool` table. `utils/plugin.py` executes that source, instantiates its `Tools` class, and `utils/tools.py:get_tools()` exposes every public callable discovered on the instance. Reserved parameters beginning with `__` are removed from the model-visible schema and injected by OpenWebUI.
 - Functions are Python source stored in the `function` table. They instantiate `Pipe`, `Filter`, `Action`, or `Event`. Filters run through `inlet`, `stream`, and `outlet` hooks in `utils/filter.py`; Pipes appear as models and implement their own chat request/response path.
 - “Pipelines” in this release are not an internal job system. `routers/pipelines.py` proxies admin operations and inlet/outlet calls to a separately deployed OpenAI-compatible Pipelines server.
-- Uploaded file bytes go through `routers/files.py:upload_file_handler()` to `Storage.upload_file()`. A `FileForm` row is then inserted into the `file` table. The local provider writes to `UPLOAD_DIR`, which is `DATA_DIR/uploads` (normally `/app/backend/data/uploads`), not an arbitrary `/mnt/uploads` directory.
+- Uploaded file bytes go through `routers/files.py:upload_file_handler()` to `Storage.upload_file()`. A `FileForm` row is then inserted into the `file` table. The local provider writes to `UPLOAD_DIR`, which is `DATA_DIR/uploads` (normally `/app/backend/data/uploads`), not an arbitrary `/mnt/uploads` directory. `[v0.11.3: same function signature and same publication path; the `metadata` form field now parses through a `JSONCodec` wrapper instead of stdlib `json`, and image/video uploads can additionally route to content extraction even when `content_extraction_engine != 'external'` — neither changes how this overlay registers worker outputs.]`
 - The chat frontend sends file descriptors shaped like `{type: "file"|"image", id, url: id, name, content_type, size, ...}`. Chat middleware places this list in `metadata.files`; `utils/tools.py` injects it as `__files__`. A Tool must resolve `entry.id` with `Files.get_file_by_id()` and then resolve the stored path with `Storage.get_file()` after checking ownership/access. A UUID-prefixed stored filename is an implementation detail and is never an LLM argument.
 - Downloadability and the user Files browser require both storage bytes and a `file` table row. Merely writing below a mounted directory is insufficient. Downloads use `/api/v1/files/{id}/content` and enforce owner/admin/access-grant checks.
 - Knowledge bases use the `knowledge`, `knowledge_file`, and file records plus the configured vector adapter. Chroma is already the default adapter and can use either a local persistent client or one HTTP Chroma instance. Knowledge is retrieved context and is not executable.
@@ -26,7 +28,7 @@ This file was written before implementation code. The decisions below come from 
 
 - Runtime branding comes from backend `WEBUI_NAME`; however `env.py` appends ` (Open WebUI)` to custom names. Startup `<title>` is hardcoded in `src/app.html`, notification titles are hardcoded in `src/routes/+layout.svelte`, and channel titles and PWA/OpenSearch metadata contain additional literals. Favicons and splash artwork are under `static/`.
 - Uploaded user images already render inline in `Messages/UserMessage.svelte` when either `type === "image"` or `content_type` begins with `image/`. The upload path sets `content_type`, and `InputMenu/Files.svelte` maps stored image MIME types back to `type: "image"`. Assistant output images render inline in `Messages/ResponseMessage.svelte` when the returned file descriptor has the same shape. Stage 8 therefore hardens and tests this existing behavior instead of replacing it.
-- The file picker used from chat is `MessageInput/InputMenu/Files.svelte`; it calls `/api/v1/files/search` and therefore reads the `file` table. The Code Interpreter/terminal side panel is `ChatControls.svelte`; its Files tab is a separate Pyodide/terminal filesystem view. Scientific outputs will be registered in OpenWebUI Files and attached to the assistant message; they are not presented as unregistered paths in a browser-only Pyodide filesystem.
+- The file picker used from chat is `MessageInput/InputMenu/Files.svelte`; it calls `/api/v1/files/search` and therefore reads the `file` table. The Code Interpreter/terminal side panel is `ChatControls.svelte`; its Files tab is a separate Pyodide/terminal filesystem view. Scientific outputs will be registered in OpenWebUI Files and attached to the assistant message; they are not presented as unregistered paths in a browser-only Pyodide filesystem. `[v0.11.3: this "Code Interpreter/terminal" panel is unchanged and still purely browser-side Pyodide (WASM), confirmed at the same file paths. It is not the same thing as the new, unrelated "Open Terminal" feature introduced in this release (XTerminal.svelte, TERMINAL_SERVER_CONNECTIONS) — see §12, which is a real server-side command/file-execution surface an admin can wire up and is explicitly not to be enabled here.]`
 
 ## 2. Placement decisions
 
@@ -52,6 +54,9 @@ The categories in the mandate are used explicitly below. A component can have a 
 | System prompts | **Versioned prompt files + OpenWebUI model config** | Git stores the canonical prompt. An admin copies it into Workspace → Models → System Prompt or uses the authenticated model update API. The database remains the runtime source because `ModelEditor.svelte` writes `params.system` and request middleware applies it. |
 | Future DL models | **Tool adapter + routed worker queue** | Each future model has one orchestrating Tool method and an inference wrapper in the service. Weights live under a read-only model volume, never in Tool source or Knowledge. GPU queue/concurrency and resource Valves are reused. |
 | Future agentic file editing | **Later-stage scoped Tool + sandbox service; not implemented now** | Stage 13 only designs this. A future service will resolve all paths below one configured project root, use separate read/write capabilities, require diffs and explicit approval for writes/deletes, and append every operation to the audit trail. It will not expose a general shell or unrestricted filesystem Tool. |
+| Lunar DEM generation (ISIS → ASP → OTB) | **Two Tool actions in one adapter + two new backend/worker container pairs, each mission/sensor-agnostic by construction** | `lunar_dem_pipeline` exposes `submit_dem`/`submit_orthorectify`/`status`/`cancel`. `submit_dem` takes two already-ISIS-preprocessed (spice-stage, not map-projected) stereo images and queues Ames Stereo Pipeline bundle-adjustment/correlation/`point2dem` on the isolated `asp_cpu` queue, using `sacai/asp-runtime` (already built; installs ISIS 8.3.0 alongside it, matching `sacai/isis-runtime`). `submit_orthorectify` takes one image and a DEM (typically a completed DEM job's published artifact) and queues an Orfeo ToolBox (CNES; the user's "OTV" meant OTB) stage on the isolated `otb_cpu` queue. Both stages run the same operator-configured-command-template pattern as the existing ISIS wrapper (`isis/isis_preprocess.py`): `dem/asp_stereo.py` and `dem/otb_postprocess.py` hardcode no ASP/OTB flags, sensor session type, or algorithm choice — only the placeholders (`{left}`/`{right}`/`{prefix}`/`{output}` for ASP; `{input}`/`{dem}`/`{output}` for OTB) that the operator's own command templates (`ASP_BUNDLE_ADJUST_COMMAND`, `ASP_STEREO_COMMAND`, `ASP_POINT2DEM_COMMAND`, `OTB_POSTPROCESS_COMMAND`) fill in per deployment. This is what keeps the pipeline "not specific to a mission or sensor": the generic `isis-worker` (ISIS 8.3.0) stays the default ISIS path for any mission it can ingest, and DEM/orthorectification never branch on mission identity at all. |
+| Chandrayaan-2 TMC-2 (mission-specific ISIS variant) | **Optional Compose profile, opt-in per job, never the default** | `ch2-worker` (`profiles: ["ch2"]`) layers the same generic `isis/isis_preprocess.py` wrapper onto `sacai/ch2-runtime` (ISIS 10 RC2, a separate conda env and a separate `ISISDATA` tree — not proven compatible with the ISIS 8.3.0 data area, so kept distinct rather than merged). A submitted `isis3` job only routes to the isolated `ch2_cpu` queue when it explicitly sets `options.mission == "ch2_tmc2"`; every other `isis3`/`lunar_dem`/`orthorectify` job keeps using the generic path regardless of which mission or sensor it came from. Rejected: making `ch2-runtime` (ISIS 10 RC2) the default ISIS worker, which would special-case every non-Chandrayaan-2 job around one mission's data area instead of the reverse. |
+| Standalone super-resolution (SR4RS) | **Tool adapter + new worker container, on-demand, not a DEM pipeline stage** | `super_res` submits/statuses/cancels a single-image job on the isolated `superres_cpu` queue, mirroring `isis3_preprocess`'s single-input Tool/job pattern exactly rather than `lunar_dem_pipeline`'s two-input one. `superres-worker` layers the SACAI service/Celery code onto the operator's existing `sacai-super-res:latest` image; `superres/run_superres.py` hardcodes no SR4RS savedmodel path, tile size, or padding, only the operator-configured `SUPERRES_COMMAND` template. Kept out of the DEM pipeline's automatic sequencing per explicit operator direction — it is a capability the model can invoke on any image, not a stage `lunar_dem_pipeline` chains automatically. |
 
 ## 3. Queue and resource policy
 
@@ -63,8 +68,14 @@ Default queues and caps:
 |---|---:|---:|---:|
 | `planetir_cpu` | 2 | 8 CPU, 32 GiB RAM | 60 minutes |
 | `isis_cpu` | 1 | 16 CPU, 64 GiB RAM | 120 minutes |
+| `asp_cpu` | 1 | 16 CPU, 64 GiB RAM | 200 minutes |
+| `otb_cpu` | 1 | 8 CPU, 32 GiB RAM | 60 minutes |
+| `ch2_cpu` (opt-in, `profiles: ["ch2"]`) | 1 | 16 CPU, 64 GiB RAM | 120 minutes |
+| `superres_cpu` (opt-in, `profiles: ["superres"]`) | 1 | 8 CPU, 32 GiB RAM | 60 minutes |
 | `gpu` | 1 | 1 H100 allocation, 64 GiB host RAM | 60 minutes |
 | `maintenance` | 1 | 2 CPU, 4 GiB RAM | 30 minutes |
+
+Stereo correlation (`asp_cpu`) gets the longest default time limit of any queue: bundle adjustment plus `parallel_stereo` correlation over a full lunar stereo pair routinely runs far longer than a single-image ISIS calibration pass. Concurrency stays at 1 for `asp_cpu`/`otb_cpu`/`ch2_cpu`/`superres_cpu`, matching `isis_cpu`'s existing precedent of capping the heaviest, least-parallelizable stages hardest.
 
 These are conservative starting points, not hidden constants. Compose environment variables and service Valves configure accepted file size, queue name, timeouts and concurrency. Operators measure real imagery before raising them. Redis itself never executes scientific code. The API rejects new submissions when queued-job count or per-user outstanding-job limits are exceeded; accepted excess work waits instead of consuming more RAM.
 
@@ -97,6 +108,7 @@ The proposed order is retained with two small implementation dependencies docume
 - A Knowledge document describing callable functions was rejected because Knowledge is prompt context, not an executable registry, and can induce false tool calls.
 - Multiple narrow STAC or PlanetIR helper methods were rejected because OpenWebUI exposes public methods as separate model-callable functions and this project has already experienced tool-call loops from that pattern.
 - A second vector store was rejected because OpenWebUI already supports Chroma and the mandate permits only one platform-owned store.
+- Enabling OpenWebUI's built-in "Open Terminal" feature (`TERMINAL_SERVER_CONNECTIONS`, introduced in a later OpenWebUI release than this platform's original baseline; see §12) was rejected for the same reason Stage 13 rejects a general agentic shell: it is a real server-side command/file-execution surface, not the browser-side Pyodide Code Interpreter this platform already relies on. It is left unconfigured (`TERMINAL_SERVER_CONNECTIONS=[]`, the OpenWebUI default) and is not wired to any SACAI Tool or service.
 
 ## 8. Production frontend corrections
 
@@ -162,3 +174,182 @@ to the queued task but is excluded from job metadata, audit events, task
 results, and error text. Production should use HTTPS for any route crossing an
 untrusted network; this design cannot make a token sent to an HTTP server
 confidential.
+
+## 12. v0.10.2 → v0.11.3 re-audit
+
+The vendored OpenWebUI source was upgraded from the originally audited `v0.10.2`
+(commit `ecd48e2f718220a6400ecf49eafd4867a38feb10`) to `v0.11.3` (commit
+`2a960a59fe1dbbd35282f0556b3666d81102e781`). Every claim in §1 and §8 was
+re-checked directly against the new source (`diff -u` against the old tree,
+corroborated with the new tree's `CHANGELOG.md`) rather than assumed to still
+hold. Unchanged claims are not repeated here; §1/§8 carry inline
+`[v0.11.3: ...]` notes only where something actually changed. This section
+records what changed, why it does not require redesigning any placement
+decision above, and what still needs attention during the connected-builder
+rebuild.
+
+**Middleware rewrite (affects §1's `main.py` bullet only).** The five
+separate `BaseHTTPMiddleware` subclasses v0.10.2 installed individually
+(`RedirectMiddleware`, `SecurityHeadersMiddleware`, `CommitSessionMiddleware`,
+`AuthTokenMiddleware`, `WebsocketUpgradeGuardMiddleware`) are replaced by one
+consolidated pure-ASGI `AppHTTPMiddleware`
+(`backend/open_webui/utils/asgi_middleware.py`), fixing `CancelledError` noise
+on client disconnect. `AuditLoggingMiddleware` and `CompressMiddleware` are
+still added the same way, unaffected. Chat prep/completion still lives in
+`utils/middleware.py`. This platform does not import or subclass any of the
+old middleware classes, so nothing here needed to change; it is recorded
+because any future overlay code that hooks into the HTTP layer by middleware
+class name must target `AppHTTPMiddleware` instead.
+
+**New optional `request` Filter hook.** Alongside `inlet`/`stream`/`outlet`,
+a Filter may now also implement `request`, called once after inlet/RAG
+processing and again before every follow-up model call after tool use.
+Dispatch is still `getattr(module, hook_name, None)`, so the grounding guard
+Filter (outlet-only) is unaffected and required no change.
+
+**File uploads gained two optional behaviors, same publication path.** A
+`JSONCodec` wrapper now parses the upload `metadata` form field, and
+image/video uploads can route to content extraction even when
+`content_extraction_engine != 'external'`. `upload_file_handler()`'s
+signature, its `Storage.upload_file()` → `file` table insert path, and
+`UPLOAD_DIR` are unchanged, so every Tool's output-publication step needed no
+change.
+
+**Dependency changes worth a build-time watch.** `backend/requirements.txt`
+drops `python-jose` in favor of `joserfc`, and renames
+`rapidocr-onnxruntime` to `rapidocr` (a package rename, not a drop-in
+version bump). `grep -rn "import jose\|rapidocr"` across `service/`,
+`openwebui_tools/`, `openwebui_functions/`, `branding/`, and `docker/` found
+no references in this overlay, so no source change was required — but the
+connected AlmaLinux builder's wheel resolution (`run_on_alma_builder.sh`)
+must re-run cleanly against the new `requirements.txt` before any bundle is
+trusted, since this was verified by source inspection, not a real dependency
+resolution. `static/themes/` (the built-in rosepine theme CSS) was removed
+upstream; nothing in this overlay referenced it.
+
+**Branding overlay verified unchanged, not just assumed.** Every exact string
+`branding/apply_branding.py` and `branding/verify_branding_overlay.py` match
+against — the `WEBUI_NAME`/`(Open WebUI)` suffix block and
+`WEBUI_FAVICON_URL` in `env.py`, `WEBUI_VERSION = APP_VERSION;` in
+`constants.ts`, the full `compareVersion()` body in `utils/index.ts`, the
+`/static/logo.png` reference in `main.py`, and `static/static/site.webmanifest`
+— were confirmed byte-for-byte identical in `v0.11.3` by direct inspection of
+the vendored tree, so the overlay required no code changes. The
+`compareVersion()` null-unsafety this platform patches (§8) is also still
+unfixed upstream between `v0.10.2` and `v0.11.3`; the defensive patch stays.
+Separately, `v0.11.3` adds `// LICENSE covers this Open WebUI ...` attribution
+comments above roughly 105 branding-surface locations plus two new
+`static/BRANDING.md` files; these are new license scaffolding, not new
+runtime strings, and do not change what the overlay's blanket
+`"Open WebUI"`/`"OpenWebUI"` substring replacement already covers, but should
+be read once before this platform's branding overlay strips the marks they
+document.
+
+**New "Open Terminal" feature — confirmed unrelated to this platform's
+Code Interpreter, confirmed disabled by default, rejected the same way a
+general shell already is (§7).** `v0.11.3` adds a real server-side terminal
+integration (`XTerminal.svelte`, `AddTerminalServerModal.svelte`,
+`TERMINAL_SERVER_CONNECTIONS` / `TERMINAL_PROXY_HEADERS` in `config.py`,
+default `[]`) that lets an admin connect an external Open Terminal MCP server
+providing actual command execution and file reads. This is not the same
+component as the "Code Interpreter/terminal side panel" referenced elsewhere
+in this document, which is still the unrelated, purely browser-side Pyodide
+panel (unchanged in `v0.11.3`). No SACAI Tool, Function, or service wires
+into `TERMINAL_SERVER_CONNECTIONS`, and it must stay unset in every `.env` for
+the same reason Stage 13 does not implement an agentic shell Tool.
+
+**Database migration risk.** Ten new Alembic revisions exist between the two
+trees, including one adding `chat.timer_at` plus indexes. `v0.11.3`'s
+CHANGELOG explains that upgrading through `v0.11.0`/`0.11.1`/`0.11.2` as
+separate steps could previously leave a database half-migrated after a failed
+step, surfacing later as a missing-column error; `v0.11.3` fixes the migration
+runner to stop cleanly at the failing revision instead. Since this platform
+upgrades in one step directly from `v0.10.2` to `v0.11.3` (one
+`alembic upgrade head` run through the full chain, not three separate
+deploys), that specific multi-step failure mode does not apply — but a full
+backup of the `openwebui-data` volume (or bind-mounted path, if migrated per
+§ below) before the offline rebuild remains mandatory regardless, per every
+intervening release's own upgrade warning.
+
+## 13. Lunar DEM pipeline: build/test gaps found while wiring it in
+
+Recorded here rather than silently fixed, because each needs either a real
+build/test run this session cannot perform, or a decision only whoever
+maintains the affected file should make.
+
+- **`otb-worker` is `profiles: ["otb"]` (opt-in), unlike `asp-worker`.**
+  `docker/otb-worker.Dockerfile` now defaults `OTB_BASE_IMAGE` to the
+  operator's real `otb:otb` (confirmed to be a pre-existing `.tar.gz` loaded
+  with `docker load`; its actual build method and OS/Python are otherwise
+  unknown even to the operator) and fails the build immediately with a clear
+  message if `python3`/`pip3` aren't present or aren't 3.11, rather than a
+  cryptic `pip install --no-index` ABI error. `asp-worker`/`ch2-worker`
+  reuse `isis-worker`'s already-proven Python compatibility (ASP 3.5.0
+  installs ISIS 8.3.0 alongside it); OTB has no such precedent. If the build
+  fails, run `docker run --rm otb:otb sh -c 'which python3
+  otbcli_OrthoRectification; cat /etc/os-release'` to see what is actually
+  in the image, then either install/upgrade Python inside a derived image,
+  build `docker/otb-runtime.Dockerfile` from scratch instead (still present,
+  conda-based, not yet built), or run OTB out-of-process from a plain
+  `scientific-service`-based container that shells out to `otb:otb`'s
+  binaries by absolute path. Remove `profiles: ["otb"]` once the build
+  succeeds, to match `asp-worker`'s default-enabled status.
+- **OpenWebUI Pipelines (`ghcr.io/openwebui/pipelines:main`) needed no new
+  code.** Per `routers/pipelines.py:get_openai_connection()`, a Pipelines
+  server is registered the identical way any OpenAI-compatible endpoint is
+  -- through `Config.get('openai.api_base_urls'/'openai.api_keys')`, i.e.
+  `OPENAI_API_BASE_URLS`/`OPENAI_API_KEYS` (the same vars vLLM already
+  uses). OpenWebUI tells them apart at the model-list level, from whether
+  each entry's own `/models` response carries a `pipeline` field, not from
+  any separate `PIPELINES_*` config. `.env.server-254.example` now lists
+  both vLLM and Pipelines in that one semicolon-joined pair; the Pipelines
+  port/key there (`9099`, `0p3n-w3bu!`) are that project's own published
+  defaults, not confirmed against the operator's actual container.
+- **Standalone super-resolution (`sacai-super-res:latest`, SR4RS-based:
+  <https://github.com/remicres/sr4rs>) is now wired in as its own capability,
+  not a DEM pipeline stage.** Confirmed by the operator as a CLI tool run via
+  its own `docker-compose`-driven Python scripts (`sr.py`), and explicitly
+  standalone/on-demand rather than chained into ISIS → ASP → OTB. Follows
+  `isis3_preprocess`'s exact single-input Tool pattern rather than
+  `lunar_dem_pipeline`'s two-input one: `superres/run_superres.py` (generic
+  wrapper, same contract as the ISIS/ASP/OTB wrappers), `service/app/
+  superres.py:enhance()` (mirrors `isis.py:preprocess()`), a new `superres`
+  `JobSubmit`/`JobStatus` kind and `superres_cpu` queue, and
+  `openwebui_tools/super_res.py` (mirrors `isis3_preprocess.py`'s async/
+  `upload_file_handler`-publication pattern). `docker/superres-worker.
+  Dockerfile` builds FROM the operator's existing `sacai-super-res:latest`
+  with the same diagnostic-first Python/pip check as `otb-worker.Dockerfile`
+  (compatibility with the offline wheelhouse is equally unconfirmed here),
+  and `superres-worker` is `profiles: ["superres"]` for the same reason
+  `otb-worker` is. Not reproduced: whatever volumes/environment
+  `sacai-super-res`'s own `docker-compose` file used for model weights or
+  GPU access -- check that before relying on `superres-worker` in
+  production.
+- **The existing `scientific_workflow` LangGraph orchestrator has a
+  pre-existing cross-container gap, not introduced by this pipeline but
+  directly adjacent to it.** `orchestrator.py`'s `_isis_node` calls
+  `isis.preprocess()` as a plain in-process Python function, not a routed
+  Celery subtask — but `celery_app.py` routes the whole `sacai.workflow` task
+  (the LangGraph graph's execution) onto `planetir_queue` unconditionally.
+  `planetir-worker` runs the plain `sacai/scientific-service` image, which
+  has no ISIS binaries (`isis-worker` is a separate image built FROM
+  `isis-runtime` specifically because of this). So a `workflow` job whose
+  input actually needs ISIS preprocessing will have its `SACAI_ISIS_COMMAND`
+  wrapper attempt to exec ISIS commands that do not exist in that container,
+  and fail. The DEM pipeline avoids this class of bug entirely: `lunar_dem`/
+  `orthorectify` jobs are dispatched via the ordinary routed-Celery-task path
+  (`api.py` picks `asp_cpu`/`otb_cpu` explicitly, matching the container that
+  actually has the right binaries), never as an in-process call from a
+  differently-queued task. Fixing the `workflow` graph's gap is out of scope
+  here; it would mean either giving `planetir-worker` ISIS binaries too, or
+  redesigning `orchestrator.py` to dispatch each node as its own properly
+  routed Celery task/chain rather than a direct function call.
+- **`openwebui_tools/isis3_preprocess_tool.py` appears to be a superseded
+  draft, not the file actually in use.** `next_step` step 19 and
+  `service/tests/test_tool_surfaces.py` both reference
+  `openwebui_tools/isis3_preprocess.py` (async, direct OpenWebUI file
+  publication via `upload_file_handler`, SHA-256 artifact verification) as
+  the real ISIS3 Tool. `lunar_dem.py` was written to match that pattern, not
+  `isis3_preprocess_tool.py`'s earlier `requests`-based draft style. Whoever
+  maintains this repo should confirm `isis3_preprocess_tool.py` is dead and
+  remove it, or explain what it is actually for if it is not.

@@ -375,7 +375,9 @@ export const searchKnowledgeBases = async (
 	query: string | null = null,
 	viewOption: string | null = null,
 	page: number | null = null,
-	source: string | null = null
+	source: string | null = null,
+	orderBy: string | null = null,
+	direction: string | null = null
 ) => {
 	let error = null;
 
@@ -384,6 +386,8 @@ export const searchKnowledgeBases = async (
 	if (viewOption) searchParams.append('view_option', viewOption);
 	if (source) searchParams.append('source', source);
 	if (page) searchParams.append('page', page.toString());
+	if (orderBy) searchParams.append('order_by', orderBy);
+	if (direction) searchParams.append('direction', direction);
 
 	const res = await fetch(`${WEBUI_API_BASE_URL}/knowledge/search?${searchParams.toString()}`, {
 		method: 'GET',
@@ -927,6 +931,34 @@ export const reindexKnowledgeFiles = async (token: string) => {
 	let error = null;
 
 	const res = await fetch(`${WEBUI_API_BASE_URL}/knowledge/reindex`, {
+		method: 'POST',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			authorization: `Bearer ${token}`
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			error = err.detail;
+			console.error(err);
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const reindexKnowledgeMetadata = async (token: string) => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/knowledge/metadata/reindex`, {
 		method: 'POST',
 		headers: {
 			Accept: 'application/json',

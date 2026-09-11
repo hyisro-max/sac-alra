@@ -8,8 +8,8 @@ services:
       network: none
       args:
         PROJECT_NAME: "${PROJECT_NAME:-SAC-ALRA}"
-        OPENWEBUI_VERSION: "0.10.2"
-    image: sacai/openwebui:v0.10.2-sacalra3-amd64
+        OPENWEBUI_VERSION: "0.11.3"
+    image: sacai/openwebui:v0.11.3-sacalra1-amd64
     restart: unless-stopped
     ports:
       - "${SACAI_WEB_PORT:-3000}:8080"
@@ -26,6 +26,14 @@ services:
       no_proxy: ""
       OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:?set the existing Ollama API URL in .env}"
       OLLAMA_BASE_URLS: "${OLLAMA_BASE_URLS:-}"
+      # vLLM (or any OpenAI-compatible server) runs alongside Ollama the same
+      # way Ollama does: as an existing external service this stack connects
+      # to, never as a Compose service. Leave ENABLE_OPENAI_API=false until
+      # OPENAI_API_BASE_URLS is actually set; otherwise OpenWebUI falls back
+      # to the public OpenAI API, which is unreachable from an offline host.
+      ENABLE_OPENAI_API: "${ENABLE_OPENAI_API:-false}"
+      OPENAI_API_BASE_URLS: "${OPENAI_API_BASE_URLS:-}"
+      OPENAI_API_KEYS: "${OPENAI_API_KEYS:-}"
       OFFLINE_MODE: "true"
       VECTOR_DB: chroma
       CHROMA_HTTP_HOST: chroma
@@ -41,7 +49,66 @@ services:
     volumes:
       - openwebui-data:/app/backend/data
       - ./offline/models/openwebui-cache:/app/backend/data/cache
-      - sacai-outputs:/data/outputs:ro
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs:ro"
+      - ./openwebui_tools:/opt/sacai/tools:ro
+      - ./openwebui_functions:/opt/sacai/functions:ro
+      - ./prompts:/opt/sacai/prompts:ro
+    depends_on:
+      sacai-api:
+        condition: service_healthy
+      chroma:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl --silent --fail http://localhost:8080/health | jq -e '.status == true' >/dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+
+  openwebui-canary:
+    # A second OpenWebUI frontend for testing this release (new image tag,
+    # DEM Tool, vLLM wiring) without touching the running `openwebui`
+    # service or its data. Same image and same sacai-api/chroma/redis
+    # backend ("part of the project"), but its own port and its own data
+    # volume: two OpenWebUI instances must never share one openwebui-data
+    # volume, since each is a separate writer against the same sqlite/user
+    # database. Opt-in only -- `docker compose up -d` alone never starts or
+    # touches this service, and it never restarts `openwebui`.
+    profiles: ["canary"]
+    image: sacai/openwebui:v0.11.3-sacalra1-amd64
+    restart: unless-stopped
+    ports:
+      - "${SACAI_CANARY_WEB_PORT:-3006}:8080"
+    environment:
+      WEBUI_NAME: "${PROJECT_NAME:-SAC-ALRA} (canary)"
+      WEBUI_SECRET_KEY: "${WEBUI_SECRET_KEY:?set WEBUI_SECRET_KEY in .env}"
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      NO_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      no_proxy: ""
+      OLLAMA_BASE_URL: "${OLLAMA_BASE_URL:?set the existing Ollama API URL in .env}"
+      OLLAMA_BASE_URLS: "${OLLAMA_BASE_URLS:-}"
+      ENABLE_OPENAI_API: "${ENABLE_OPENAI_API:-false}"
+      OPENAI_API_BASE_URLS: "${OPENAI_API_BASE_URLS:-}"
+      OPENAI_API_KEYS: "${OPENAI_API_KEYS:-}"
+      OFFLINE_MODE: "true"
+      VECTOR_DB: chroma
+      CHROMA_HTTP_HOST: chroma
+      CHROMA_HTTP_PORT: "8000"
+      CHROMA_TENANT: default_tenant
+      CHROMA_DATABASE: default_database
+      AUDIT_LOG_LEVEL: REQUEST_RESPONSE
+      AUDIT_INCLUDED_PATHS: "tools,functions,models,files,chat"
+      ENABLE_AUDIT_LOGS_FILE: "true"
+      ENABLE_PIP_INSTALL_FRONTMATTER_REQUIREMENTS: "false"
+      NLTK_DATA: /app/backend/data/cache/nltk_data
+      LANGGRAPH_STRICT_MSGPACK: "true"
+    volumes:
+      - openwebui-canary-data:/app/backend/data
+      - ./offline/models/openwebui-cache:/app/backend/data/cache
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs:ro"
       - ./openwebui_tools:/opt/sacai/tools:ro
       - ./openwebui_functions:/opt/sacai/functions:ro
       - ./prompts:/opt/sacai/prompts:ro
@@ -86,12 +153,15 @@ services:
       SACAI_NOTEBOOK_SOFT_TIME_LIMIT_SECONDS: "${SACAI_NOTEBOOK_SOFT_TIME_LIMIT_SECONDS:-3900}"
       SACAI_CLEANUP_MIN_AGE_HOURS: "${SACAI_CLEANUP_MIN_AGE_HOURS:-168}"
       SACAI_ISIS_COMMAND: "python /opt/sacai/isis_preprocess.py --input {input} --output {output}"
+      SACAI_ASP_COMMAND: "python /opt/sacai/asp_stereo.py --left {left} --right {right} --output {output}"
+      SACAI_OTB_COMMAND: "python /opt/sacai/otb_postprocess.py --input {input} --dem {dem} --output {output}"
+      SACAI_SUPERRES_COMMAND: "python /opt/sacai/run_superres.py --input {input} --output {output}"
       LANGGRAPH_STRICT_MSGPACK: "true"
     volumes:
       - openwebui-data:/app/backend/data:ro
-      - sacai-outputs:/data/outputs
-      - sacai-audit:/data/audit
-      - sacai-tool-versions:/data/tool_versions
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs"
+      - "${SACAI_AUDIT_HOST_PATH:-./offline/data/audit}:/data/audit"
+      - "${SACAI_TOOL_VERSIONS_HOST_PATH:-./offline/data/tool_versions}:/data/tool_versions"
     depends_on:
       redis:
         condition: service_healthy
@@ -108,9 +178,9 @@ services:
     environment: *service-environment
     volumes:
       - openwebui-data:/app/backend/data:ro
-      - sacai-outputs:/data/outputs
-      - sacai-audit:/data/audit
-      - sacai-tool-versions:/data/tool_versions
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs"
+      - "${SACAI_AUDIT_HOST_PATH:-./offline/data/audit}:/data/audit"
+      - "${SACAI_TOOL_VERSIONS_HOST_PATH:-./offline/data/tool_versions}:/data/tool_versions"
     depends_on:
       redis:
         condition: service_healthy
@@ -138,10 +208,45 @@ services:
       ISIS_PROJECT_COMMAND: "${ISIS_PROJECT_COMMAND:-}"
     volumes:
       - openwebui-data:/app/backend/data:ro
-      - sacai-outputs:/data/outputs
-      - sacai-audit:/data/audit
-      - sacai-tool-versions:/data/tool_versions
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs"
+      - "${SACAI_AUDIT_HOST_PATH:-./offline/data/audit}:/data/audit"
+      - "${SACAI_TOOL_VERSIONS_HOST_PATH:-./offline/data/tool_versions}:/data/tool_versions"
       - "${ISISDATA_HOST_PATH:-./offline/isisdata}:/opt/isisdata:ro"
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${ISIS_CPU_LIMIT:-16}"
+          memory: "${ISIS_MEMORY_LIMIT:-64G}"
+
+  ch2-worker:
+    # Optional, mission-specific (Chandrayaan-2 TMC-2 only) -- see
+    # docker/ch2-worker.Dockerfile. The generic isis-worker above is the
+    # default path for everything else; this stays opt-in the same way
+    # isis-worker itself is opt-in via the "isis" profile.
+    profiles: ["ch2"]
+    build:
+      context: ..
+      dockerfile: sacai-platform/docker/ch2-worker.Dockerfile
+      network: none
+    image: sacai/ch2-worker:10.0.0rc2-sacai1-amd64
+    restart: unless-stopped
+    environment:
+      <<: *service-environment
+      ISISROOT: /opt/isis
+      ISISDATA: /opt/isisdata-ch2
+      ISIS_INGEST_COMMAND: "${CH2_ISIS_INGEST_COMMAND:-}"
+      ISIS_CALIBRATE_COMMAND: "${CH2_ISIS_CALIBRATE_COMMAND:-}"
+      ISIS_SPICE_COMMAND: "${CH2_ISIS_SPICE_COMMAND:-}"
+      ISIS_PROJECT_COMMAND: "${CH2_ISIS_PROJECT_COMMAND:-}"
+    volumes:
+      - openwebui-data:/app/backend/data:ro
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs"
+      - "${SACAI_AUDIT_HOST_PATH:-./offline/data/audit}:/data/audit"
+      - "${SACAI_TOOL_VERSIONS_HOST_PATH:-./offline/data/tool_versions}:/data/tool_versions"
+      - "${ISISDATA_CH2_HOST_PATH:-./offline/isisdata-ch2}:/opt/isisdata-ch2:ro"
     depends_on:
       redis:
         condition: service_healthy
@@ -157,8 +262,8 @@ services:
     command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--queues=notebook_remote", "--concurrency=${NOTEBOOK_CONCURRENCY:-4}", "--hostname=notebook@%h"]
     environment: *service-environment
     volumes:
-      - sacai-outputs:/data/outputs
-      - sacai-audit:/data/audit
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs"
+      - "${SACAI_AUDIT_HOST_PATH:-./offline/data/audit}:/data/audit"
     depends_on:
       redis:
         condition: service_healthy
@@ -167,6 +272,106 @@ services:
         limits:
           cpus: "${NOTEBOOK_CPU_LIMIT:-4}"
           memory: "${NOTEBOOK_MEMORY_LIMIT:-8G}"
+
+  asp-worker:
+    # Default-enabled (no profile): Ames Stereo Pipeline stereo correlation
+    # and point2dem are core to this platform's autonomous lunar DEM
+    # generation goal, the same way planetir-worker is always on.
+    build:
+      context: ..
+      dockerfile: sacai-platform/docker/asp-worker.Dockerfile
+      network: none
+    image: sacai/asp-worker:3.5.0-sacai1-amd64
+    restart: unless-stopped
+    environment:
+      # ISISROOT/ISISDATA default paths already come from asp-runtime.Dockerfile;
+      # only ISISDATA needs restating here to match the bind mount below.
+      <<: *service-environment
+      ISISDATA: /opt/isisdata
+      ASP_BUNDLE_ADJUST_COMMAND: "${ASP_BUNDLE_ADJUST_COMMAND:-}"
+      ASP_STEREO_COMMAND: "${ASP_STEREO_COMMAND:-}"
+      ASP_POINT2DEM_COMMAND: "${ASP_POINT2DEM_COMMAND:-}"
+    volumes:
+      - openwebui-data:/app/backend/data:ro
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs"
+      - "${SACAI_AUDIT_HOST_PATH:-./offline/data/audit}:/data/audit"
+      - "${SACAI_TOOL_VERSIONS_HOST_PATH:-./offline/data/tool_versions}:/data/tool_versions"
+      - "${ISISDATA_HOST_PATH:-./offline/isisdata}:/opt/isisdata:ro"
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${ASP_CPU_LIMIT:-16}"
+          memory: "${ASP_MEMORY_LIMIT:-64G}"
+
+  otb-worker:
+    # Opt-in for now (profiles: ["otb"]), same as isis-worker/ch2-worker --
+    # NOT because orthorectification is optional to the platform's goal
+    # (it isn't), but because this image's actual build/tag on the target
+    # host is still unconfirmed (see docker/otb-worker.Dockerfile's header
+    # comment: the otb conda env's Python-ABI compatibility with the offline
+    # wheelhouse is unverified, unlike asp-worker/ch2-worker which reuse
+    # isis-runtime's already-proven compatibility). Flip this to
+    # default-enabled (remove the profiles line, matching asp-worker) once
+    # confirmed. Requires docker/otb-runtime.Dockerfile to be built first.
+    profiles: ["otb"]
+    build:
+      context: ..
+      dockerfile: sacai-platform/docker/otb-worker.Dockerfile
+      network: none
+    image: sacai/otb-worker:9.1.0-sacai1-amd64
+    restart: unless-stopped
+    environment:
+      <<: *service-environment
+      OTB_POSTPROCESS_COMMAND: "${OTB_POSTPROCESS_COMMAND:-}"
+    volumes:
+      - openwebui-data:/app/backend/data:ro
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs"
+      - "${SACAI_AUDIT_HOST_PATH:-./offline/data/audit}:/data/audit"
+      - "${SACAI_TOOL_VERSIONS_HOST_PATH:-./offline/data/tool_versions}:/data/tool_versions"
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${OTB_CPU_LIMIT:-8}"
+          memory: "${OTB_MEMORY_LIMIT:-32G}"
+
+  superres-worker:
+    # Opt-in (profiles: ["superres"]), same reasoning as otb-worker: built
+    # FROM the operator's existing sacai-super-res:latest (SR4RS), whose
+    # Python-ABI compatibility with the offline wheelhouse is unconfirmed.
+    # Standalone/on-demand capability, not chained into ISIS/ASP/OTB DEM
+    # generation -- see openwebui_tools/super_res.py. Check what volumes/env
+    # sacai-super-res's own docker-compose file used (model weights, any GPU
+    # reservation) and add the same here before relying on this in
+    # production; none of that is reproduced automatically.
+    profiles: ["superres"]
+    build:
+      context: ..
+      dockerfile: sacai-platform/docker/superres-worker.Dockerfile
+      network: none
+    image: sacai/superres-worker:1.0.0-sacai1-amd64
+    restart: unless-stopped
+    environment:
+      <<: *service-environment
+      SUPERRES_COMMAND: "${SUPERRES_COMMAND:-}"
+    volumes:
+      - openwebui-data:/app/backend/data:ro
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs"
+      - "${SACAI_AUDIT_HOST_PATH:-./offline/data/audit}:/data/audit"
+      - "${SACAI_TOOL_VERSIONS_HOST_PATH:-./offline/data/tool_versions}:/data/tool_versions"
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${SUPERRES_CPU_LIMIT:-8}"
+          memory: "${SUPERRES_MEMORY_LIMIT:-32G}"
 
   redis:
     image: redis:7.4.2-alpine
@@ -197,8 +402,12 @@ services:
 
 volumes:
   openwebui-data:
-  sacai-outputs:
-  sacai-audit:
-  sacai-tool-versions:
+  openwebui-canary-data:
   redis-data:
   chroma-data:
+# sacai-outputs, sacai-audit, and sacai-tool-versions are bind-mounted host
+# directories (SACAI_OUTPUT_HOST_PATH / SACAI_AUDIT_HOST_PATH /
+# SACAI_TOOL_VERSIONS_HOST_PATH in .env, default ./offline/data/{outputs,
+# audit,tool_versions}) so scientific outputs, the audit trail, and installed
+# tool versions are plain, directly browsable/backupable directories on the
+# host rather than Docker-managed volumes. See scripts/prepare_output_host_paths.sh.

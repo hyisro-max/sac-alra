@@ -50,7 +50,7 @@ diagnostic. This runtime override is safe even when the old image metadata still
 contains the builder proxy.
 
 The permanent correction below uses the new image tag
-`sacai/openwebui:v0.10.2-sacalra3-amd64`. Do not retag an old image with that
+`sacai/openwebui:v0.11.3-sacalra1-amd64`. Do not retag an old image with that
 name; generate and transfer the new archive from the connected builder.
 
 ## Part A — Mac
@@ -295,15 +295,59 @@ uncomment this optional line in both `.env` files:
 OLLAMA_BASE_URLS=http://10.61.247.253:11434;http://10.61.247.254:11434
 ```
 
-### 13. Load images and validate Compose without internet
+If a vLLM instance is already running on this host with an OpenAI-compatible
+API (e.g. `10.61.247.254:8004`), set these three lines in that host's `.env`
+so OpenWebUI connects to it alongside Ollama, not instead of it. The URL must
+include the `/v1` suffix; `OLLAMA_BASE_URL` never does, but `OPENAI_API_BASE_URLS`
+always does:
+
+```dotenv
+ENABLE_OPENAI_API=true
+OPENAI_API_BASE_URLS=http://10.61.247.254:8004/v1
+OPENAI_API_KEYS=EMPTY
+```
+
+`EMPTY` is vLLM's own placeholder key for a server started without
+`--api-key`; use the real key instead if this vLLM deployment enforces one.
+Leave `ENABLE_OPENAI_API=false` (the default) on any server with no vLLM
+instance, since an empty `OPENAI_API_BASE_URLS` otherwise falls back to the
+public OpenAI API, which an offline host cannot reach.
+
+### 13. Load images, prepare output paths, and validate Compose without internet
 
 ```bash
 ./scripts/load_offline_images.sh
+./scripts/prepare_output_host_paths.sh
 docker compose --env-file .env -f docker-compose.yml config --quiet
 ```
 
 There should be no Ollama image and no compose `ollama` service. That is
 intentional.
+
+`prepare_output_host_paths.sh` creates the `SACAI_OUTPUT_HOST_PATH` /
+`SACAI_AUDIT_HOST_PATH` / `SACAI_TOOL_VERSIONS_HOST_PATH` directories from
+`.env` (default `./offline/data/{outputs,audit,tool_versions}`) and confirms
+they are writable. These are plain host directories, not Docker named
+volumes, so scientific outputs, the audit trail, and installed tool versions
+stay directly browsable/backupable outside any container. If this host
+previously ran a release that used the old `sacai-outputs`/`sacai-audit`/
+`sacai-tool-versions` named volumes, run
+`./scripts/migrate_named_volumes_to_bind_mounts.sh` first so that data is not
+left behind.
+
+This release also moves the vendored OpenWebUI source from `v0.10.2` to
+`v0.11.3`. If this host already has an `openwebui-data` volume from an
+earlier SAC-ALRA deployment (real chats, users, or settings, not a fresh
+volume), back it up before continuing — the rebuild below runs OpenWebUI's
+own Alembic migrations against it in one step, and that is not reversible:
+
+```bash
+./scripts/backup_openwebui_data.sh
+```
+
+It no-ops with a message if no `openwebui-data` volume exists yet (a
+genuinely first-time install), otherwise it copies the volume to a timestamped
+directory under `offline/data/`.
 
 ### 14. Rebuild and start SAC-ALRA offline
 
@@ -323,7 +367,7 @@ The OpenWebUI build has an 8 GiB Node heap. The Docker VM or host still needs
 enough physical memory for that build.
 
 The rebuild is deliberately `--no-cache`, force-recreates the container, checks
-that its immutable image ID matches the newly built `sacalra3` tag, and fails if
+that its immutable image ID matches the newly built `sacalra1` tag, and fails if
 any uppercase or lowercase proxy variable has a non-empty runtime value. Do not
 use `docker history` timestamps as the acceptance test; use the image-ID and
 environment checks printed by `rebuild_offline.sh`.
@@ -357,6 +401,21 @@ UI opens, go to **Admin Settings → Connections → Ollama**, replace the old U
 with the same external URL from `.env`, and save. Do not reset the whole
 OpenWebUI database to change one connection.
 
+If `ENABLE_OPENAI_API=true` was set, confirm vLLM the same way from inside the
+container, using the same URL as `OPENAI_API_BASE_URLS`:
+
+```bash
+docker compose --env-file .env -f docker-compose.yml exec -T openwebui \
+  curl --fail --silent --show-error -o /dev/null -w '%{http_code}\n' \
+  http://10.61.247.254:8004/v1/models
+```
+
+It must print `200`. Then in **Admin Settings → Connections**, confirm an
+OpenAI connection now exists at that URL and that its model list is populated;
+if it is not, the vLLM server is not actually reachable from inside the
+container (check the server is bound to `0.0.0.0`, not `127.0.0.1`, and that
+no firewall separates the Docker network from port `8004`).
+
 ### 17. Open the correct SAC-ALRA web address
 
 For server `10.61.247.253`:
@@ -374,7 +433,7 @@ http://10.61.247.254:3000
 Each SAC-ALRA deployment has its own OpenWebUI, Chroma, Redis, job, and audit
 data. Only Ollama model serving is external to the stack.
 
-After installing the `sacalra3` frontend, open a private browser window or clear
+After installing the `sacalra1` frontend, open a private browser window or clear
 the site's cached application data so an older JavaScript bundle is not reused.
 Confirm both corrected frontend paths:
 
@@ -407,6 +466,10 @@ In **Workspace → Tools → Create Tool**, install:
 4. `openwebui_tools/isis3_preprocess.py` only when ISIS is enabled
 5. `openwebui_tools/admin_cleanup.py` only for an admin-restricted model
 6. `openwebui_tools/jupyter_runtime.py` only when the external Jupyter runtime is approved
+7. `openwebui_tools/lunar_dem.py` only when `asp-worker`/`otb-worker` are up and
+   at least `ASP_STEREO_COMMAND`/`ASP_POINT2DEM_COMMAND` are configured
+8. `openwebui_tools/super_res.py` only when `superres-worker`
+   (`COMPOSE_PROFILES=superres`) is up and `SUPERRES_COMMAND` is configured
 
 If `stac_catalog` already exists, edit that same Tool record and replace its
 complete source with the new `openwebui_tools/stac_catalog.py`; do not create a

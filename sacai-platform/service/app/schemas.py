@@ -14,13 +14,23 @@ class JobSubmit(BaseModel):
     to the API and then to a routed worker.
     """
 
-    kind: Literal["planetir", "isis3", "workflow"]
+    kind: Literal["planetir", "isis3", "workflow", "lunar_dem", "orthorectify", "superres"]
     user_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     input_file_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     input_path: str = Field(min_length=1)
     original_name: str = Field(min_length=1, max_length=512)
     correlation_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     options: dict[str, Any] = Field(default_factory=dict)
+    # Required for "lunar_dem" (the right stereo-pair image) and
+    # "orthorectify" (the DEM to orthorectify against); ignored otherwise.
+    # A second trusted, Tool-resolved path -- never a model-supplied one --
+    # validated the same way input_path is, so it needs its own field rather
+    # than living inside the free-form options mapping.
+    secondary_input_file_id: str | None = Field(
+        default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
+    )
+    secondary_input_path: str | None = Field(default=None, min_length=1)
+    secondary_original_name: str | None = Field(default=None, min_length=1, max_length=512)
 
 
 class Artifact(BaseModel):
@@ -156,7 +166,7 @@ class JobStatus(BaseModel):
 
     job_id: str
     correlation_id: str
-    kind: Literal["planetir", "isis3", "workflow", "notebook"]
+    kind: Literal["planetir", "isis3", "workflow", "notebook", "lunar_dem", "orthorectify", "superres"]
     status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
     result: dict[str, Any] | None = None
     error: str | None = None

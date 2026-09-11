@@ -1,6 +1,6 @@
 # Stage 0 — source exploration and architecture
 
-Deliverable: `../ARCHITECTURE_DECISIONS.md`. It records the checked-in v0.10.2
+Deliverable: `../ARCHITECTURE_DECISIONS.md`. It records the checked-in v0.11.3
 backend/frontend findings, placement of every requirement, queue budgets, and
 the design-only agentic boundary before implementation.
 

@@ -130,7 +130,7 @@ The canonical prompt is `prompts/planetir_system_prompt.md` or
    and numeric-grounding cases, and record results.
 
 For scripted promotion, use OpenWebUI's authenticated model update API from an
-approved admin workstation only after inspecting the v0.10.2 request shape in
+approved admin workstation only after inspecting the v0.11.3 request shape in
 the browser network panel/API docs. Send the full existing model record with
 only `params.system` changed; never guess a partial-update contract and never
 put an admin token in the repository.

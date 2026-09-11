@@ -150,7 +150,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("source_root", type=Path)
     parser.add_argument("--project-name", default="SAC-ALRA")
-    parser.add_argument("--openwebui-version", default="0.10.2")
+    parser.add_argument("--openwebui-version", default="0.11.3")
     parser.add_argument("--logo", type=Path, required=True)
     arguments = parser.parse_args()
     replace_frontend_branding(arguments.source_root, arguments.project_name)
