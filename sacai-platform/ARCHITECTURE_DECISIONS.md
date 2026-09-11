@@ -275,21 +275,21 @@ Recorded here rather than silently fixed, because each needs either a real
 build/test run this session cannot perform, or a decision only whoever
 maintains the affected file should make.
 
-- **`otb-runtime` is not yet built.** Unlike `asp-runtime`/`ch2-runtime`/
-  `isis-runtime`, no `sacai/otb-runtime` image exists on this deployment yet.
-  `docker/otb-runtime.Dockerfile` installs Orfeo ToolBox from its conda-forge
-  `otb` package the same way `asp-runtime.Dockerfile` installs
-  `stereo-pipeline`, but its conda environment's own Python version has not
-  been checked against the offline wheelhouse (built for Python 3.11/
-  linux-amd64). `asp-worker`/`ch2-worker` reuse `isis-worker`'s already-proven
-  Python compatibility (ASP 3.5.0 installs ISIS 8.3.0 alongside it); OTB has
-  no such precedent here. Build `otb-runtime` on the connected AlmaLinux
-  builder first; if `pip install --no-index` fails in `otb-worker.Dockerfile`
-  on an ABI/version mismatch, either pin `otb-runtime.Dockerfile` to
-  `python=3.11` explicitly and rebuild, or run OTB out-of-process from a
-  plain `scientific-service`-based container that shells out to the `otb`
-  conda env's binaries by absolute path instead of installing SACAI's own
-  Python dependencies into that conda env.
+- **`otb-worker` is `profiles: ["otb"]` (opt-in), unlike `asp-worker`.** An
+  operator-built `otb:otb` image already exists on the production host, but
+  its build method (conda-based like `docker/otb-runtime.Dockerfile`
+  assumes, the official `orfeotoolbox/otb` image, or something else) and
+  therefore its Python-ABI compatibility with the offline wheelhouse (built
+  for Python 3.11/linux-amd64) are unconfirmed. `asp-worker`/`ch2-worker`
+  reuse `isis-worker`'s already-proven Python compatibility (ASP 3.5.0
+  installs ISIS 8.3.0 alongside it); OTB has no such precedent here. Once
+  `otb:otb`'s build method is confirmed, either point
+  `docker/otb-worker.Dockerfile`'s `OTB_BASE_IMAGE` ARG at it directly, pin
+  `docker/otb-runtime.Dockerfile` to `python=3.11` explicitly and rebuild
+  under the expected tag, or run OTB out-of-process from a plain
+  `scientific-service`-based container that shells out to the `otb` env's
+  binaries by absolute path -- then remove the `profiles: ["otb"]` line so
+  it goes back to default-enabled, matching `asp-worker`.
 - **The existing `scientific_workflow` LangGraph orchestrator has a
   pre-existing cross-container gap, not introduced by this pipeline but
   directly adjacent to it.** `orchestrator.py`'s `_isis_node` calls

@@ -106,6 +106,46 @@ if [[ "${SACAI_BUILD_ISIS:-0}" == "1" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# ASP (Ames Stereo Pipeline) runtime base image
+#
+# Unlike SACAI_BUILD_ISIS/SACAI_BUILD_CH2 (both truly optional missions/
+# containers), asp-worker is a default-enabled Compose service -- lunar DEM
+# generation is this platform's stated main goal, the same way
+# planetir-worker is always on. So this builds by default; set
+# SACAI_BUILD_ASP=0 to skip it in a run that only needs the other images
+# (e.g. iterating on OpenWebUI/service changes without re-touching ASP).
+# Needs real internet egress through the connected-builder proxy, same as
+# the ISIS build above.
+# ---------------------------------------------------------------------------
+
+if [[ "${SACAI_BUILD_ASP:-1}" == "1" ]]; then
+
+  docker build --platform=linux/amd64 \
+    "${PROXY_ARGS[@]}" \
+    -f "${SACAI_ROOT}/docker/asp-runtime.Dockerfile" \
+    -t sacai/asp-runtime:3.5.0-amd64 \
+    "${REPO_ROOT}"
+
+fi
+
+# ---------------------------------------------------------------------------
+# Optional CH2 (Chandrayaan-2 TMC-2, ISIS 10 RC2) runtime base image
+#
+# Set SACAI_BUILD_CH2=1 to build it in this run. Mission-specific and
+# skipped by default, same as SACAI_BUILD_ISIS/SACAI_BUILD_ASP above.
+# ---------------------------------------------------------------------------
+
+if [[ "${SACAI_BUILD_CH2:-0}" == "1" ]]; then
+
+  docker build --platform=linux/amd64 \
+    "${PROXY_ARGS[@]}" \
+    -f "${SACAI_ROOT}/docker/ch2-runtime.Dockerfile" \
+    -t sacai/ch2-runtime:10.0.0rc2-amd64 \
+    "${REPO_ROOT}"
+
+fi
+
+# ---------------------------------------------------------------------------
 # Download scientific-service Python wheelhouse
 # ---------------------------------------------------------------------------
 
@@ -261,19 +301,19 @@ docker run --rm --platform=linux/amd64 \
 
 docker build --platform=linux/amd64 --network=none \
   -f "${SACAI_ROOT}/docker/service.Dockerfile" \
-  -t sacai/scientific-service:1.0.0-amd64 \
+  -t sacai/scientific-service:1.1.0-amd64 \
   "${REPO_ROOT}"
 
 docker build --platform=linux/amd64 --network=none \
   -f "${SACAI_ROOT}/docker/service-test.Dockerfile" \
-  -t sacai/tests:1.0.0-amd64 \
+  -t sacai/tests:1.1.0-amd64 \
   "${REPO_ROOT}"
 
 docker run --rm --platform=linux/amd64 \
-  sacai/tests:1.0.0-amd64
+  sacai/tests:1.1.0-amd64
 
 docker run --rm --platform=linux/amd64 \
-  sacai/tests:1.0.0-amd64 \
+  sacai/tests:1.1.0-amd64 \
   sh -c 'python -m pip check && python -m pip freeze --all' \
   > "${SACAI_ROOT}/offline/requirements-linux-amd64.lock.txt"
 
@@ -299,6 +339,38 @@ if docker image inspect sacai/isis-runtime:8.3.0-amd64 >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
+# Optional ASP worker image (built on top of the base image staged above)
+# ---------------------------------------------------------------------------
+
+if docker image inspect sacai/asp-runtime:3.5.0-amd64 >/dev/null 2>&1; then
+  docker build --platform=linux/amd64 --network=none \
+    -f "${SACAI_ROOT}/docker/asp-worker.Dockerfile" \
+    -t sacai/asp-worker:3.5.0-sacai1-amd64 \
+    "${REPO_ROOT}"
+
+  docker save \
+    -o "${SACAI_ROOT}/offline/images/asp-runtime-amd64.tar" \
+    sacai/asp-runtime:3.5.0-amd64 \
+    sacai/asp-worker:3.5.0-sacai1-amd64
+fi
+
+# ---------------------------------------------------------------------------
+# Optional CH2 worker image (built on top of the base image staged above)
+# ---------------------------------------------------------------------------
+
+if docker image inspect sacai/ch2-runtime:10.0.0rc2-amd64 >/dev/null 2>&1; then
+  docker build --platform=linux/amd64 --network=none \
+    -f "${SACAI_ROOT}/docker/ch2-worker.Dockerfile" \
+    -t sacai/ch2-worker:10.0.0rc2-sacai1-amd64 \
+    "${REPO_ROOT}"
+
+  docker save \
+    -o "${SACAI_ROOT}/offline/images/ch2-runtime-amd64.tar" \
+    sacai/ch2-runtime:10.0.0rc2-amd64 \
+    sacai/ch2-worker:10.0.0rc2-sacai1-amd64
+fi
+
+# ---------------------------------------------------------------------------
 # Save all runtime images
 # ---------------------------------------------------------------------------
 
@@ -311,8 +383,8 @@ docker save \
   sacai/openwebui-node-deps:v0.11.3-sacalra1-amd64 \
   sacai/openwebui-python-deps:v0.11.3-sacalra1-amd64 \
   sacai/openwebui:v0.11.3-sacalra1-amd64 \
-  sacai/scientific-service:1.0.0-amd64 \
-  sacai/tests:1.0.0-amd64
+  sacai/scientific-service:1.1.0-amd64 \
+  sacai/tests:1.1.0-amd64
 
 # ---------------------------------------------------------------------------
 # Generate final bundle checksums
@@ -544,19 +616,19 @@ echo "OpenWebUI tag: sacai/openwebui:v0.11.3-sacalra1-amd64"
 
 # docker build --platform=linux/amd64 --network=none \
 #   -f "${SACAI_ROOT}/docker/service.Dockerfile" \
-#   -t sacai/scientific-service:1.0.0-amd64 \
+#   -t sacai/scientific-service:1.1.0-amd64 \
 #   "${REPO_ROOT}"
 
 # docker build --platform=linux/amd64 --network=none \
 #   -f "${SACAI_ROOT}/docker/service-test.Dockerfile" \
-#   -t sacai/tests:1.0.0-amd64 \
+#   -t sacai/tests:1.1.0-amd64 \
 #   "${REPO_ROOT}"
 
 # docker run --rm --platform=linux/amd64 \
-#   sacai/tests:1.0.0-amd64
+#   sacai/tests:1.1.0-amd64
 
 # docker run --rm --platform=linux/amd64 \
-#   sacai/tests:1.0.0-amd64 \
+#   sacai/tests:1.1.0-amd64 \
 #   sh -c 'python -m pip check && python -m pip freeze --all' \
 #   > "${SACAI_ROOT}/offline/requirements-linux-amd64.lock.txt"
 
@@ -611,8 +683,8 @@ echo "OpenWebUI tag: sacai/openwebui:v0.11.3-sacalra1-amd64"
 #   sacai/openwebui-node-deps:v0.11.3-sacalra1-amd64 \
 #   sacai/openwebui-python-deps:v0.11.3-sacalra1-amd64 \
 #   sacai/openwebui:v0.11.3-sacalra1-amd64 \
-#   sacai/scientific-service:1.0.0-amd64 \
-#   sacai/tests:1.0.0-amd64
+#   sacai/scientific-service:1.1.0-amd64 \
+#   sacai/tests:1.1.0-amd64
 
 # # ---------------------------------------------------------------------------
 # # Generate final bundle checksums

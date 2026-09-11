@@ -491,4 +491,72 @@ build itself, and tuning the empty `ASP_*`/`OTB_*`/`CH2_ISIS_*_COMMAND`
 templates for a specific sensor remain deployment work on the connected
 builder and production hosts; none of that was claimed as passing here.
 
+## 2026-09-11 — openwebui-canary service; connected-builder image drift fixes
+
+Purpose: the operator reported production 254 image state, which surfaced
+real gaps between what this repo's scripts produce and what is actually
+running.
+
+Added `openwebui-canary`, a second OpenWebUI frontend (own port via
+`SACAI_CANARY_WEB_PORT`, own `openwebui-canary-data` volume -- two instances
+must never share one OpenWebUI database) sharing the existing
+`sacai-api`/`redis`/`chroma` backend, gated behind `profiles: ["canary"]` so
+neither a bare `docker compose up` nor a targeted `up -d --no-deps
+openwebui-canary` ever touches the operator's existing production `openwebui`
+container.
+
+Fixed two real, pre-existing bugs found by comparing `docker image ls` on 254
+against what this repo expects:
+
+- `scripts/prepare_connected_bundle.sh` built and tagged
+  `sacai/scientific-service`/`sacai/tests` as `1.0.0`, while
+  `docker-compose.yml` and both deployment docs have always expected `1.1.0`.
+  This explains the `1.0.0` image sitting unused on 254 (harmless in
+  practice, since `sacai-api`/`planetir-worker`/`notebook-worker` all carry
+  their own `build:` block and rebuild fresh under the correct tag
+  regardless) but is still a real drift, now fixed to `1.1.0` throughout.
+- `scripts/prepare_connected_bundle.sh` never learned about ASP or CH2 at
+  all -- the operator had built `asp-runtime`/`ch2-runtime` and their worker
+  images by hand, outside any tracked script. Added `SACAI_BUILD_ASP`
+  (defaults to `1`: asp-worker is a default-enabled Compose service, unlike
+  the truly-optional ISIS/CH2 containers, so it now builds by default rather
+  than requiring an explicit opt-in) and `SACAI_BUILD_CH2` (defaults to `0`,
+  mission-specific, mirrors `SACAI_BUILD_ISIS`) gated sections, each
+  mirroring the existing ISIS section's build-then-conditionally-build-
+  worker-then-save-to-its-own-tar pattern exactly. `load_offline_images.sh`
+  now loads `asp-runtime-amd64.tar` unconditionally (asp-worker has no
+  `build:` fallback path once its base image is missing, so a missing tar
+  should fail loudly at load time, not with a confusing error later) and
+  conditionally loads `ch2-runtime-amd64.tar`/`otb-runtime-amd64.tar`.
+
+`otb-worker` was changed from default-enabled to `profiles: ["otb"]`: the
+operator's existing `otb:otb` image's build method and therefore its
+Python-ABI compatibility with the offline wheelhouse are still unconfirmed
+(unlike `asp-runtime`/`ch2-runtime`, which both install ISIS 8.3.0 alongside
+them and inherit `isis-runtime`'s already-proven compatibility). Left
+un-added to `prepare_connected_bundle.sh` for the same reason -- adding a
+`SACAI_BUILD_OTB` gate before confirming the real base image/build method
+would template a build that might not match what actually runs.
+
+Checks run:
+
+```text
+bash -n scripts/prepare_connected_bundle.sh scripts/load_offline_images.sh
+python3 -c "import yaml; yaml.safe_load(open('docker-compose.yml'))"
+docker compose --env-file .env.example -f docker-compose.yml config --services
+COMPOSE_PROFILES=otb docker compose --env-file .env.example -f docker-compose.yml config --services
+COMPOSE_PROFILES=canary docker compose --env-file .env.server-254.example -f docker-compose.yml config --quiet
+COMPOSE_PROFILES=isis,ch2,canary docker compose --env-file .env.example -f docker-compose.yml config --quiet
+# repeated for .env.server-253.example and .env.server-254.example
+```
+
+All passed. `otb-worker`'s absence from the default service list and
+presence under `COMPOSE_PROFILES=otb` were confirmed directly, as was
+`openwebui-canary` publishing port 3006 while the primary `openwebui`
+service keeps its own configured port. Still unconfirmed here (needs the
+operator's answer, then a real connected-builder run):
+`otb:otb`'s actual build method; whether/how `sacai-super-res:latest` and
+`ghcr.io/openwebui/pipelines:main` (both present on 254, neither referenced
+anywhere in this repo) should be wired in.
+
 

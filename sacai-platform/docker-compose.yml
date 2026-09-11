@@ -306,11 +306,16 @@ services:
           memory: "${ASP_MEMORY_LIMIT:-64G}"
 
   otb-worker:
-    # Default-enabled: Orfeo ToolBox post-processing (e.g. orthorectifying
-    # imagery against the DEM asp-worker produces) is the final stage of the
-    # autonomous DEM pipeline. Requires docker/otb-runtime.Dockerfile to be
-    # built first -- see its own header comment for the untested Python-ABI
-    # risk that build may need to resolve.
+    # Opt-in for now (profiles: ["otb"]), same as isis-worker/ch2-worker --
+    # NOT because orthorectification is optional to the platform's goal
+    # (it isn't), but because this image's actual build/tag on the target
+    # host is still unconfirmed (see docker/otb-worker.Dockerfile's header
+    # comment: the otb conda env's Python-ABI compatibility with the offline
+    # wheelhouse is unverified, unlike asp-worker/ch2-worker which reuse
+    # isis-runtime's already-proven compatibility). Flip this to
+    # default-enabled (remove the profiles line, matching asp-worker) once
+    # confirmed. Requires docker/otb-runtime.Dockerfile to be built first.
+    profiles: ["otb"]
     build:
       context: ..
       dockerfile: sacai-platform/docker/otb-worker.Dockerfile
