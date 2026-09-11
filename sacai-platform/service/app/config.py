@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     dem_queue: str = "asp_cpu"
     otb_queue: str = "otb_cpu"
     ch2_queue: str = "ch2_cpu"
+    superres_queue: str = "superres_cpu"
     job_soft_time_limit_seconds: int = Field(default=3300, ge=60)
     job_time_limit_seconds: int = Field(default=3600, ge=60)
     isis_soft_time_limit_seconds: int = Field(default=6900, ge=60)
@@ -50,11 +51,14 @@ class Settings(BaseSettings):
     dem_time_limit_seconds: int = Field(default=12000, ge=60)
     otb_soft_time_limit_seconds: int = Field(default=3300, ge=60)
     otb_time_limit_seconds: int = Field(default=3600, ge=60)
+    superres_soft_time_limit_seconds: int = Field(default=3300, ge=60)
+    superres_time_limit_seconds: int = Field(default=3600, ge=60)
     cleanup_preview_ttl_seconds: int = Field(default=900, ge=60)
     cleanup_min_age_hours: int = Field(default=168, ge=1)
     isis_command: str = ""
     asp_command: str = ""
     otb_command: str = ""
+    superres_command: str = ""
     isis_catalog_path: Path = Path("/opt/sacai/isis_catalog.json")
 
     @field_validator("internal_token")

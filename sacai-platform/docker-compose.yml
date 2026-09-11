@@ -155,6 +155,7 @@ services:
       SACAI_ISIS_COMMAND: "python /opt/sacai/isis_preprocess.py --input {input} --output {output}"
       SACAI_ASP_COMMAND: "python /opt/sacai/asp_stereo.py --left {left} --right {right} --output {output}"
       SACAI_OTB_COMMAND: "python /opt/sacai/otb_postprocess.py --input {input} --dem {dem} --output {output}"
+      SACAI_SUPERRES_COMMAND: "python /opt/sacai/run_superres.py --input {input} --output {output}"
       LANGGRAPH_STRICT_MSGPACK: "true"
     volumes:
       - openwebui-data:/app/backend/data:ro
@@ -338,6 +339,39 @@ services:
         limits:
           cpus: "${OTB_CPU_LIMIT:-8}"
           memory: "${OTB_MEMORY_LIMIT:-32G}"
+
+  superres-worker:
+    # Opt-in (profiles: ["superres"]), same reasoning as otb-worker: built
+    # FROM the operator's existing sacai-super-res:latest (SR4RS), whose
+    # Python-ABI compatibility with the offline wheelhouse is unconfirmed.
+    # Standalone/on-demand capability, not chained into ISIS/ASP/OTB DEM
+    # generation -- see openwebui_tools/super_res.py. Check what volumes/env
+    # sacai-super-res's own docker-compose file used (model weights, any GPU
+    # reservation) and add the same here before relying on this in
+    # production; none of that is reproduced automatically.
+    profiles: ["superres"]
+    build:
+      context: ..
+      dockerfile: sacai-platform/docker/superres-worker.Dockerfile
+      network: none
+    image: sacai/superres-worker:1.0.0-sacai1-amd64
+    restart: unless-stopped
+    environment:
+      <<: *service-environment
+      SUPERRES_COMMAND: "${SUPERRES_COMMAND:-}"
+    volumes:
+      - openwebui-data:/app/backend/data:ro
+      - "${SACAI_OUTPUT_HOST_PATH:-./offline/data/outputs}:/data/outputs"
+      - "${SACAI_AUDIT_HOST_PATH:-./offline/data/audit}:/data/audit"
+      - "${SACAI_TOOL_VERSIONS_HOST_PATH:-./offline/data/tool_versions}:/data/tool_versions"
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${SUPERRES_CPU_LIMIT:-8}"
+          memory: "${SUPERRES_MEMORY_LIMIT:-32G}"
 
   redis:
     image: redis:7.4.2-alpine

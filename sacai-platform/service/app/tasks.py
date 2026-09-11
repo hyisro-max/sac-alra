@@ -13,6 +13,7 @@ from .orchestrator import invoke_scientific
 from .notebook_runtime import run_remote_notebook
 from .otb import orthorectify
 from .planetir import analyze
+from .superres import enhance
 from .schemas import CleanupRequest, JobSubmit, RemoteNotebookResult, RemoteNotebookSubmit
 
 
@@ -56,6 +57,13 @@ def isis_task(payload: dict[str, Any]) -> dict[str, Any]:
     """Execute one raw-product ISIS3 payload on the isolated ISIS queue."""
 
     return _run_job(payload, preprocess)
+
+
+@celery_app.task(name="sacai.superres")
+def superres_task(payload: dict[str, Any]) -> dict[str, Any]:
+    """Execute one standalone super-resolution payload on the isolated superres queue."""
+
+    return _run_job(payload, enhance)
 
 
 def _run_paired_job(payload: dict[str, Any], processor) -> dict[str, Any]:

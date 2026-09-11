@@ -25,7 +25,15 @@ from .schemas import (
     RemoteNotebookSubmit,
 )
 from .security import require_internal_token, resolve_below
-from .tasks import isis_task, lunar_dem_task, notebook_task, orthorectify_task, planetir_task, workflow_task
+from .tasks import (
+    isis_task,
+    lunar_dem_task,
+    notebook_task,
+    orthorectify_task,
+    planetir_task,
+    superres_task,
+    workflow_task,
+)
 
 
 def _redis() -> Redis:
@@ -133,6 +141,9 @@ def submit_job(request: JobSubmit) -> JobAccepted:
     elif request.kind == "orthorectify":
         queue = get_settings().otb_queue
         task = orthorectify_task
+    elif request.kind == "superres":
+        queue = get_settings().superres_queue
+        task = superres_task
     else:
         ready = bool(request.options.get("already_calibrated")) or source.suffix.lower() in {".tif", ".tiff"}
         queue = get_settings().planetir_queue if ready else get_settings().isis_queue

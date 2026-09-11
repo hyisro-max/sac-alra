@@ -36,6 +36,7 @@ def test_each_tool_has_one_model_visible_entry_point() -> None:
         "scientific_workflow.py": ["scientific_workflow"],
         "jupyter_runtime.py": ["jupyter_runtime"],
         "lunar_dem.py": ["lunar_dem_pipeline"],
+        "super_res.py": ["super_res"],
     }
     for filename, methods in expected.items():
         assert _public_methods(root / filename) == methods

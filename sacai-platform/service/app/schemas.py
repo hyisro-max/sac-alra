@@ -14,7 +14,7 @@ class JobSubmit(BaseModel):
     to the API and then to a routed worker.
     """
 
-    kind: Literal["planetir", "isis3", "workflow", "lunar_dem", "orthorectify"]
+    kind: Literal["planetir", "isis3", "workflow", "lunar_dem", "orthorectify", "superres"]
     user_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     input_file_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     input_path: str = Field(min_length=1)
@@ -166,7 +166,7 @@ class JobStatus(BaseModel):
 
     job_id: str
     correlation_id: str
-    kind: Literal["planetir", "isis3", "workflow", "notebook", "lunar_dem", "orthorectify"]
+    kind: Literal["planetir", "isis3", "workflow", "notebook", "lunar_dem", "orthorectify", "superres"]
     status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
     result: dict[str, Any] | None = None
     error: str | None = None

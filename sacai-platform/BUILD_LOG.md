@@ -611,4 +611,60 @@ itself against the real `otb:otb` image, and any super-res integration,
 remain deployment work pending the operator's own image inspection and
 interface description.
 
+## 2026-09-11 — standalone super-resolution Tool (SR4RS)
+
+Purpose: the operator confirmed `sacai-super-res:latest` is a CLI tool
+(SR4RS, <https://github.com/remicres/sr4rs>) run via its own `docker-compose`
+Python scripts, and explicitly wants it standalone/on-demand -- not chained
+into ISIS → ASP → OTB DEM generation.
+
+Wired following `isis3_preprocess`'s single-input pattern exactly (not
+`lunar_dem_pipeline`'s two-input one, since this takes one image in, one
+enhanced image out): `superres/run_superres.py` (generic wrapper, same
+`{input}`/`{output}`-placeholder contract as the ISIS/ASP/OTB wrappers, no
+SR4RS savedmodel path or tile size hardcoded), `service/app/superres.py:
+enhance()` (mirrors `isis.py:preprocess()`), a new `superres` `JobSubmit`/
+`JobStatus` kind routed through the existing `_run_job` Celery helper (no
+new paired-job logic needed), a new `superres_cpu` queue, and
+`openwebui_tools/super_res.py` (mirrors `isis3_preprocess.py`'s async/
+`upload_file_handler`-publication pattern and its regression test entry in
+`test_tool_surfaces.py`).
+
+`docker/superres-worker.Dockerfile` builds FROM the operator's existing
+`sacai-super-res:latest`, with the same two diagnostic `RUN` checks
+(`python3`/`pip3` presence, Python 3.11 version) as `otb-worker.Dockerfile`
+added in the prior entry -- this image's Python-ABI compatibility with the
+offline wheelhouse is equally unconfirmed. `superres-worker` is
+`profiles: ["superres"]` for the same reason. Explicitly not reproduced:
+whatever volumes/environment `sacai-super-res`'s own `docker-compose` file
+used for model weights or GPU access -- flagged in both the Dockerfile and
+`ARCHITECTURE_DECISIONS.md` §13 as something to check before relying on this
+worker in production. No connected-builder (`prepare_connected_bundle.sh`)
+changes were needed: like `otb-worker`, `superres-worker` builds entirely
+from the offline wheelhouse (`--network=none`) against an externally-sourced
+base image, so `docker compose build` on the offline host handles it once
+its profile is enabled -- there is no conda/internet-dependent base-image
+build step to gate the way ISIS/ASP/CH2 have.
+
+Checks run:
+
+```text
+python3 -m compileall -q service openwebui_tools dem isis superres branding
+python3 -c "import yaml; yaml.safe_load(open('docker-compose.yml'))"
+docker compose --env-file .env.example -f docker-compose.yml config --quiet
+COMPOSE_PROFILES=superres docker compose --env-file .env.example -f docker-compose.yml config --quiet
+COMPOSE_PROFILES=isis,ch2,otb,canary,superres docker compose --env-file .env.example -f docker-compose.yml config --quiet
+# repeated for .env.server-253.example and .env.server-254.example
+PYTHONPATH=service /tmp/sacai_venv/bin/python -m pytest -q service/tests
+```
+
+All 25 tests passed (20 pre-existing, 5 from the earlier DEM pipeline entry;
+the Tool-surface test now also covers `super_res.py`). All three `.env`
+files produced valid Compose configs both by default and with every profile
+combination enabled together. A direct functional check confirmed
+`superres_cpu` queue registration, `JobSubmit(kind="superres")` validation,
+and `sacai.superres` Celery routing. The `superres-worker` build itself
+against the real `sacai-super-res:latest` image, and confirming its
+`docker-compose` file's volumes/env, remain deployment work.
+
 

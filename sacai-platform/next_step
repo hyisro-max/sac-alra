@@ -468,6 +468,8 @@ In **Workspace → Tools → Create Tool**, install:
 6. `openwebui_tools/jupyter_runtime.py` only when the external Jupyter runtime is approved
 7. `openwebui_tools/lunar_dem.py` only when `asp-worker`/`otb-worker` are up and
    at least `ASP_STEREO_COMMAND`/`ASP_POINT2DEM_COMMAND` are configured
+8. `openwebui_tools/super_res.py` only when `superres-worker`
+   (`COMPOSE_PROFILES=superres`) is up and `SUPERRES_COMMAND` is configured
 
 If `stac_catalog` already exists, edit that same Tool record and replace its
 complete source with the new `openwebui_tools/stac_catalog.py`; do not create a

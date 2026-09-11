@@ -56,6 +56,7 @@ The categories in the mandate are used explicitly below. A component can have a 
 | Future agentic file editing | **Later-stage scoped Tool + sandbox service; not implemented now** | Stage 13 only designs this. A future service will resolve all paths below one configured project root, use separate read/write capabilities, require diffs and explicit approval for writes/deletes, and append every operation to the audit trail. It will not expose a general shell or unrestricted filesystem Tool. |
 | Lunar DEM generation (ISIS → ASP → OTB) | **Two Tool actions in one adapter + two new backend/worker container pairs, each mission/sensor-agnostic by construction** | `lunar_dem_pipeline` exposes `submit_dem`/`submit_orthorectify`/`status`/`cancel`. `submit_dem` takes two already-ISIS-preprocessed (spice-stage, not map-projected) stereo images and queues Ames Stereo Pipeline bundle-adjustment/correlation/`point2dem` on the isolated `asp_cpu` queue, using `sacai/asp-runtime` (already built; installs ISIS 8.3.0 alongside it, matching `sacai/isis-runtime`). `submit_orthorectify` takes one image and a DEM (typically a completed DEM job's published artifact) and queues an Orfeo ToolBox (CNES; the user's "OTV" meant OTB) stage on the isolated `otb_cpu` queue. Both stages run the same operator-configured-command-template pattern as the existing ISIS wrapper (`isis/isis_preprocess.py`): `dem/asp_stereo.py` and `dem/otb_postprocess.py` hardcode no ASP/OTB flags, sensor session type, or algorithm choice — only the placeholders (`{left}`/`{right}`/`{prefix}`/`{output}` for ASP; `{input}`/`{dem}`/`{output}` for OTB) that the operator's own command templates (`ASP_BUNDLE_ADJUST_COMMAND`, `ASP_STEREO_COMMAND`, `ASP_POINT2DEM_COMMAND`, `OTB_POSTPROCESS_COMMAND`) fill in per deployment. This is what keeps the pipeline "not specific to a mission or sensor": the generic `isis-worker` (ISIS 8.3.0) stays the default ISIS path for any mission it can ingest, and DEM/orthorectification never branch on mission identity at all. |
 | Chandrayaan-2 TMC-2 (mission-specific ISIS variant) | **Optional Compose profile, opt-in per job, never the default** | `ch2-worker` (`profiles: ["ch2"]`) layers the same generic `isis/isis_preprocess.py` wrapper onto `sacai/ch2-runtime` (ISIS 10 RC2, a separate conda env and a separate `ISISDATA` tree — not proven compatible with the ISIS 8.3.0 data area, so kept distinct rather than merged). A submitted `isis3` job only routes to the isolated `ch2_cpu` queue when it explicitly sets `options.mission == "ch2_tmc2"`; every other `isis3`/`lunar_dem`/`orthorectify` job keeps using the generic path regardless of which mission or sensor it came from. Rejected: making `ch2-runtime` (ISIS 10 RC2) the default ISIS worker, which would special-case every non-Chandrayaan-2 job around one mission's data area instead of the reverse. |
+| Standalone super-resolution (SR4RS) | **Tool adapter + new worker container, on-demand, not a DEM pipeline stage** | `super_res` submits/statuses/cancels a single-image job on the isolated `superres_cpu` queue, mirroring `isis3_preprocess`'s single-input Tool/job pattern exactly rather than `lunar_dem_pipeline`'s two-input one. `superres-worker` layers the SACAI service/Celery code onto the operator's existing `sacai-super-res:latest` image; `superres/run_superres.py` hardcodes no SR4RS savedmodel path, tile size, or padding, only the operator-configured `SUPERRES_COMMAND` template. Kept out of the DEM pipeline's automatic sequencing per explicit operator direction — it is a capability the model can invoke on any image, not a stage `lunar_dem_pipeline` chains automatically. |
 
 ## 3. Queue and resource policy
 
@@ -70,10 +71,11 @@ Default queues and caps:
 | `asp_cpu` | 1 | 16 CPU, 64 GiB RAM | 200 minutes |
 | `otb_cpu` | 1 | 8 CPU, 32 GiB RAM | 60 minutes |
 | `ch2_cpu` (opt-in, `profiles: ["ch2"]`) | 1 | 16 CPU, 64 GiB RAM | 120 minutes |
+| `superres_cpu` (opt-in, `profiles: ["superres"]`) | 1 | 8 CPU, 32 GiB RAM | 60 minutes |
 | `gpu` | 1 | 1 H100 allocation, 64 GiB host RAM | 60 minutes |
 | `maintenance` | 1 | 2 CPU, 4 GiB RAM | 30 minutes |
 
-Stereo correlation (`asp_cpu`) gets the longest default time limit of any queue: bundle adjustment plus `parallel_stereo` correlation over a full lunar stereo pair routinely runs far longer than a single-image ISIS calibration pass. Concurrency stays at 1 for `asp_cpu`/`otb_cpu`/`ch2_cpu`, matching `isis_cpu`'s existing precedent of capping the heaviest, least-parallelizable stages hardest.
+Stereo correlation (`asp_cpu`) gets the longest default time limit of any queue: bundle adjustment plus `parallel_stereo` correlation over a full lunar stereo pair routinely runs far longer than a single-image ISIS calibration pass. Concurrency stays at 1 for `asp_cpu`/`otb_cpu`/`ch2_cpu`/`superres_cpu`, matching `isis_cpu`'s existing precedent of capping the heaviest, least-parallelizable stages hardest.
 
 These are conservative starting points, not hidden constants. Compose environment variables and service Valves configure accepted file size, queue name, timeouts and concurrency. Operators measure real imagery before raising them. Redis itself never executes scientific code. The API rejects new submissions when queued-job count or per-user outstanding-job limits are exceeded; accepted excess work waits instead of consuming more RAM.
 
@@ -303,12 +305,26 @@ maintains the affected file should make.
   both vLLM and Pipelines in that one semicolon-joined pair; the Pipelines
   port/key there (`9099`, `0p3n-w3bu!`) are that project's own published
   defaults, not confirmed against the operator's actual container.
-- **`sacai-super-res:latest`**, also requested to be incorporated, is not
-  wired in yet: its interface (CLI vs. HTTP API), input/output shape, and
-  intended position in the ISIS → ASP → OTB pipeline are still unknown even
-  to the operator's own description so far and need confirming before any
-  worker/Tool is written for it, the same reasoning that blocked guessing at
-  `otb:otb`'s build method above.
+- **Standalone super-resolution (`sacai-super-res:latest`, SR4RS-based:
+  <https://github.com/remicres/sr4rs>) is now wired in as its own capability,
+  not a DEM pipeline stage.** Confirmed by the operator as a CLI tool run via
+  its own `docker-compose`-driven Python scripts (`sr.py`), and explicitly
+  standalone/on-demand rather than chained into ISIS → ASP → OTB. Follows
+  `isis3_preprocess`'s exact single-input Tool pattern rather than
+  `lunar_dem_pipeline`'s two-input one: `superres/run_superres.py` (generic
+  wrapper, same contract as the ISIS/ASP/OTB wrappers), `service/app/
+  superres.py:enhance()` (mirrors `isis.py:preprocess()`), a new `superres`
+  `JobSubmit`/`JobStatus` kind and `superres_cpu` queue, and
+  `openwebui_tools/super_res.py` (mirrors `isis3_preprocess.py`'s async/
+  `upload_file_handler`-publication pattern). `docker/superres-worker.
+  Dockerfile` builds FROM the operator's existing `sacai-super-res:latest`
+  with the same diagnostic-first Python/pip check as `otb-worker.Dockerfile`
+  (compatibility with the offline wheelhouse is equally unconfirmed here),
+  and `superres-worker` is `profiles: ["superres"]` for the same reason
+  `otb-worker` is. Not reproduced: whatever volumes/environment
+  `sacai-super-res`'s own `docker-compose` file used for model weights or
+  GPU access -- check that before relying on `superres-worker` in
+  production.
 - **The existing `scientific_workflow` LangGraph orchestrator has a
   pre-existing cross-container gap, not introduced by this pipeline but
   directly adjacent to it.** `orchestrator.py`'s `_isis_node` calls
