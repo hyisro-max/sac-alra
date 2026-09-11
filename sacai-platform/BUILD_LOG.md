@@ -559,4 +559,56 @@ operator's answer, then a real connected-builder run):
 `ghcr.io/openwebui/pipelines:main` (both present on 254, neither referenced
 anywhere in this repo) should be wired in.
 
+## 2026-09-11 — otb:otb base image, Pipelines connection
+
+Purpose: the operator confirmed `otb:otb` was loaded from a pre-existing
+`.tar.gz` of unknown origin (not built by `docker/otb-runtime.Dockerfile`,
+and no one currently knows its OS/Python), and asked for
+`sacai-super-res:latest` and `ghcr.io/openwebui/pipelines:main` to be
+incorporated as platform features.
+
+`docker/otb-worker.Dockerfile`'s `OTB_BASE_IMAGE` default changed from the
+never-built `sacai/otb-runtime:9.1.0-amd64` to the operator's real `otb:otb`.
+Added two `RUN` diagnostic steps before the wheelhouse install --
+`command -v python3 pip3` and a Python-3.11 version check -- so a
+build against an incompatible base fails immediately with a named cause
+and a `docker run --rm otb:otb ...` command to inspect what is actually in
+the image, instead of a bare `pip install --no-index` ABI error. `otb-worker`
+stays `profiles: ["otb"]` (opt-in) until an actual build is attempted and
+confirmed.
+
+Pipelines needed no new code: `routers/pipelines.py:get_openai_connection()`
+reads a Pipelines server's URL/key from the same
+`Config.get('openai.api_base_urls'/'openai.api_keys')` store that any
+OpenAI-compatible connection uses -- OpenWebUI tells a Pipelines server
+apart from vLLM purely by the `pipeline` field its own `/models` response
+carries, not a separate config namespace. `.env.server-254.example` now
+lists vLLM and Pipelines together in one semicolon-joined
+`OPENAI_API_BASE_URLS`/`OPENAI_API_KEYS` pair, using the Pipelines project's
+own published port/key defaults (`9099`, `0p3n-w3bu!`) as placeholders --
+not yet confirmed against the operator's actual running container.
+
+`sacai-super-res:latest` was not wired in: its CLI/API surface, input/output
+shape, and where it belongs in the ISIS → ASP → OTB pipeline are still
+unknown, including to the operator's own description so far, and guessing
+at an unknown black-box image's interface risks writing a Tool/worker that
+silently does the wrong thing. Recorded as an open question rather than
+implemented speculatively, same reasoning as `otb:otb`'s build method.
+
+Checks run:
+
+```text
+python3 -c "import yaml; yaml.safe_load(open('docker-compose.yml'))"
+docker compose --env-file .env.example -f docker-compose.yml config --quiet
+COMPOSE_PROFILES=otb docker compose --env-file .env.example -f docker-compose.yml config --quiet
+# repeated for .env.server-253.example and .env.server-254.example
+docker compose --env-file .env.server-254.example -f docker-compose.yml config | grep OPENAI_API
+```
+
+All passed; the resolved `.env.server-254.example` config shows both vLLM
+and Pipelines URLs/keys correctly combined in order. The `otb-worker` build
+itself against the real `otb:otb` image, and any super-res integration,
+remain deployment work pending the operator's own image inspection and
+interface description.
+
 

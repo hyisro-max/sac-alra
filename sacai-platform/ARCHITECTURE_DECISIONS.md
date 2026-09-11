@@ -275,21 +275,40 @@ Recorded here rather than silently fixed, because each needs either a real
 build/test run this session cannot perform, or a decision only whoever
 maintains the affected file should make.
 
-- **`otb-worker` is `profiles: ["otb"]` (opt-in), unlike `asp-worker`.** An
-  operator-built `otb:otb` image already exists on the production host, but
-  its build method (conda-based like `docker/otb-runtime.Dockerfile`
-  assumes, the official `orfeotoolbox/otb` image, or something else) and
-  therefore its Python-ABI compatibility with the offline wheelhouse (built
-  for Python 3.11/linux-amd64) are unconfirmed. `asp-worker`/`ch2-worker`
+- **`otb-worker` is `profiles: ["otb"]` (opt-in), unlike `asp-worker`.**
+  `docker/otb-worker.Dockerfile` now defaults `OTB_BASE_IMAGE` to the
+  operator's real `otb:otb` (confirmed to be a pre-existing `.tar.gz` loaded
+  with `docker load`; its actual build method and OS/Python are otherwise
+  unknown even to the operator) and fails the build immediately with a clear
+  message if `python3`/`pip3` aren't present or aren't 3.11, rather than a
+  cryptic `pip install --no-index` ABI error. `asp-worker`/`ch2-worker`
   reuse `isis-worker`'s already-proven Python compatibility (ASP 3.5.0
-  installs ISIS 8.3.0 alongside it); OTB has no such precedent here. Once
-  `otb:otb`'s build method is confirmed, either point
-  `docker/otb-worker.Dockerfile`'s `OTB_BASE_IMAGE` ARG at it directly, pin
-  `docker/otb-runtime.Dockerfile` to `python=3.11` explicitly and rebuild
-  under the expected tag, or run OTB out-of-process from a plain
-  `scientific-service`-based container that shells out to the `otb` env's
-  binaries by absolute path -- then remove the `profiles: ["otb"]` line so
-  it goes back to default-enabled, matching `asp-worker`.
+  installs ISIS 8.3.0 alongside it); OTB has no such precedent. If the build
+  fails, run `docker run --rm otb:otb sh -c 'which python3
+  otbcli_OrthoRectification; cat /etc/os-release'` to see what is actually
+  in the image, then either install/upgrade Python inside a derived image,
+  build `docker/otb-runtime.Dockerfile` from scratch instead (still present,
+  conda-based, not yet built), or run OTB out-of-process from a plain
+  `scientific-service`-based container that shells out to `otb:otb`'s
+  binaries by absolute path. Remove `profiles: ["otb"]` once the build
+  succeeds, to match `asp-worker`'s default-enabled status.
+- **OpenWebUI Pipelines (`ghcr.io/openwebui/pipelines:main`) needed no new
+  code.** Per `routers/pipelines.py:get_openai_connection()`, a Pipelines
+  server is registered the identical way any OpenAI-compatible endpoint is
+  -- through `Config.get('openai.api_base_urls'/'openai.api_keys')`, i.e.
+  `OPENAI_API_BASE_URLS`/`OPENAI_API_KEYS` (the same vars vLLM already
+  uses). OpenWebUI tells them apart at the model-list level, from whether
+  each entry's own `/models` response carries a `pipeline` field, not from
+  any separate `PIPELINES_*` config. `.env.server-254.example` now lists
+  both vLLM and Pipelines in that one semicolon-joined pair; the Pipelines
+  port/key there (`9099`, `0p3n-w3bu!`) are that project's own published
+  defaults, not confirmed against the operator's actual container.
+- **`sacai-super-res:latest`**, also requested to be incorporated, is not
+  wired in yet: its interface (CLI vs. HTTP API), input/output shape, and
+  intended position in the ISIS → ASP → OTB pipeline are still unknown even
+  to the operator's own description so far and need confirming before any
+  worker/Tool is written for it, the same reasoning that blocked guessing at
+  `otb:otb`'s build method above.
 - **The existing `scientific_workflow` LangGraph orchestrator has a
   pre-existing cross-container gap, not introduced by this pipeline but
   directly adjacent to it.** `orchestrator.py`'s `_isis_node` calls
